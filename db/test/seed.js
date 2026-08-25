@@ -1,20 +1,32 @@
-// Two complete, deliberately indistinguishable tenants.
+// Fixtures for the isolation harness. The shape encodes the two scoping rules the schema
+// actually has, which is what the previous single-trainer-per-account fixture could not do:
 //
-// The important property here is not that the fixture is realistic — it is that the two
-// tenants COLLIDE on every value except their ids and foreign keys. Same lesson dates, same
-// start times, same day-of-week, same horse names, same student names, same lesson type
-// names.
+//   TRAINER-SCOPED  students, bookings, lesson types, alerts, notes, riding windows…
+//                   Two trainers must never see each other's rows, even inside one account.
+//                   A rider taking lessons from two coaches is two rows, and each coach
+//                   reviews the profile she was given.
 //
-// That is what makes the isolation harness able to fail. If tenant A's lessons were on
-// Monday and tenant B's on Thursday, then `listBookingsOn('monday')` returns only A's rows
-// whether or not it filters by trainer — and the harness would report a pass for a query with
-// no tenant scoping in it at all. Every dimension a query might filter on has to be shared,
-// so that `trainer_id` / `account_id` is the ONLY thing that can separate them.
+//   ACCOUNT-SCOPED  horses, and any read judged about a horse. A horse is a physical animal
+//                   at a facility. Two coaches sharing a barn share it — and share its usage,
+//                   which is the whole reason `accounts` exists. Here identical rows for two
+//                   trainers is CORRECT, and a harness that demands disjointness is wrong.
 //
-// The same reasoning drives `expectDistinct` in the harness: A and B must return different
-// rows, not merely rows that each look plausible.
+// So the fixture is three trainers across two accounts:
+//
+//   Alder Stables ──┬── trainer A1 ─┐
+//                   └── trainer A2 ─┴─ share 3 horses
+//   Birch Stables ───── trainer B1 ─── 3 horses of its own
+//
+// A1 vs A2 tests the same-account pair: trainer-scoped reads must be disjoint, account-scoped
+// reads must be IDENTICAL. A1 vs B1 tests the cross-account pair: everything disjoint.
+// Without A2, neither direction of the account rule is reachable.
+//
+// As before, the tenants collide on every value except ids: same horse names, same student
+// names, same lesson dates. If A1 taught on Monday and B1 on Thursday, an unscoped
+// `listBookingsOn('monday')` would return "the right rows" by accident, and the harness would
+// report a pass for a query with no tenant filter in it at all.
 
-// A Tuesday. Both tenants teach on it, at the same hours.
+// A Tuesday. Every trainer teaches on it.
 export const SHARED_DATE = "2026-09-15";
 export const SHARED_DOW = "tue";
 
@@ -23,37 +35,25 @@ async function one(client, sql, params) {
   return rows[0].id;
 }
 
-async function seedTenant(client, label) {
-  const accountId = await one(
-    client,
-    `insert into accounts (name) values ($1) returning id`,
-    [`${label} Stables`],
-  );
+// Each trainer books the account's shared horses at their own hours. The times must not
+// collide across trainers: the horses are shared, and `horse_not_double_booked` does not care
+// which coach is asking — which is precisely the property concurrency.test.js proves.
+const SLOT_HOURS = [
+  ["09:00", "10:00", "11:00"], // trainer 1 of an account
+  ["13:00", "14:00", "15:00"], // trainer 2
+];
 
+async function seedTrainer(client, { accountId, horses, label, index }) {
   const trainerId = await one(
     client,
     `insert into trainers (account_id, name, email, timezone, late_cancel_hours)
      values ($1, $2, $3, $4, 24) returning id`,
-    [accountId, "Sam Rider", `coach+${label.toLowerCase()}@example.test`, "America/Los_Angeles"],
+    [accountId, "Sam Rider", `coach+${label}${index + 1}@example.test`, "America/Los_Angeles"],
   );
 
-  // Same three names in both accounts. A horse query that forgets `account_id` returns six.
-  const horses = [];
-  for (const [name, active] of [["Comet", true], ["Willow", true], ["Dusty", false]]) {
-    horses.push(
-      await one(
-        client,
-        `insert into horses (account_id, name, active, rest_days_per_week, riding_styles,
-                             max_daily_minutes_overall)
-         values ($1, $2, $3, 1, '{English}', 180) returning id`,
-        [accountId, name, active],
-      ),
-    );
-  }
-
   // Jamie is 15, so guardian name and phone are not optional — `students_minor_has_guardian`
-  // enforces Section 8's rule. A minor is kept in the fixture deliberately: the roster the
-  // isolation harness protects is exactly the one where a leak is most sensitive.
+  // enforces Section 8's rule. A minor stays in the fixture deliberately: the roster this
+  // harness protects is the one where a leak is most sensitive.
   const students = [];
   for (const [name, age, level] of [
     ["Alex Morgan", 34, "intermediate"],
@@ -92,9 +92,8 @@ async function seedTenant(client, label) {
   }
 
   const priceBands = [
-    await one(client, `insert into price_bands (trainer_id, name) values ($1, $2) returning id`, [
+    await one(client, `insert into price_bands (trainer_id, name) values ($1, 'Peak') returning id`, [
       trainerId,
-      "Peak",
     ]),
   ];
   const priceBandWindows = [
@@ -115,15 +114,17 @@ async function seedTenant(client, label) {
     ),
   ];
 
-  // Same date, same clock times as the other tenant. Distinct horses, so the exclusion
-  // constraint is untouched — these two barns simply both teach Tuesday mornings.
+  // All on SHARED_DATE, on the ACCOUNT's horses. That makes one table answer to both rules at
+  // once: `bookings.listOn` is trainer-scoped and must split A1 from A2, while
+  // `bookings.listForHorsesOn` is account-scoped for horse welfare and must return the union
+  // to both. Same table, same date, two different correct answers.
+  const [h0, h1, h2] = SLOT_HOURS[index];
   const bookings = [];
-  const slots = [
-    [students[0], horses[0], "09:00", "10:00", "confirmed"],
-    [students[1], horses[1], "10:00", "11:00", "pending"],
-    [students[2], horses[0], "11:00", "12:00", "completed"],
-  ];
-  for (const [studentId, horseId, start, end, status] of slots) {
+  for (const [studentId, horseId, start, end, status] of [
+    [students[0], horses[0], h0, h1, "confirmed"],
+    [students[1], horses[1], h0, h1, "pending"],
+    [students[2], horses[0], h1, h2, "completed"],
+  ]) {
     bookings.push(
       await one(
         client,
@@ -140,17 +141,17 @@ async function seedTenant(client, label) {
       client,
       `insert into recurring_bookings (trainer_id, student_id, horse_id, lesson_type_id,
                                        day_of_week, start_time, start_date)
-       values ($1, $2, $3, $4, $5, '09:00', $6) returning id`,
-      [trainerId, students[0], horses[0], lessonTypes[1], SHARED_DOW, SHARED_DATE],
+       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+      [trainerId, students[0], horses[0], lessonTypes[1], SHARED_DOW, h0, SHARED_DATE],
     ),
   ];
 
-  // Reached only through students — these tables have no trainer_id at all, so a query that
-  // forgets to join back through `students` leaks every other coach's roster detail.
+  // These four carry NEITHER trainer_id nor account_id. They hang off `students`, so their
+  // scoping is a join back through it — the easiest to get wrong and the most damaging.
   const alerts = [];
   for (const [studentId, kind, detail] of [
-    [students[0], "lesson_cancelled", "Tuesday 9am cancelled"],
-    [students[1], "no_show", "Missed Tuesday 10am"],
+    [students[0], "lesson_cancelled", "Tuesday lesson cancelled"],
+    [students[1], "no_show", "Missed Tuesday lesson"],
   ]) {
     alerts.push(
       await one(
@@ -188,13 +189,13 @@ async function seedTenant(client, label) {
     await one(
       client,
       `insert into offers (trainer_id, student_id, date, start_time, horse_id, lesson_type_id, kind)
-       values ($1, $2, $3, '14:00', $4, $5, 'target') returning id`,
-      [trainerId, students[2], SHARED_DATE, horses[1], lessonTypes[1]],
+       values ($1, $2, $3, $4, $5, $6, 'target') returning id`,
+      [trainerId, students[2], SHARED_DATE, h2, horses[1], lessonTypes[1]],
     ),
   ];
 
   // Composite primary key (student_id, horse_id) — no surrogate id — so the harness compares
-  // the pair. Kept as a string so every entity set is a set of comparable scalars.
+  // the pair, kept as a string so every entity set is a set of comparable scalars.
   await client.query(
     `insert into student_no_ride_horses (student_id, horse_id) values ($1, $2)`,
     [students[0], horses[2]],
@@ -202,10 +203,9 @@ async function seedTenant(client, label) {
   const noRideHorses = [`${students[0]}:${horses[2]}`];
 
   return {
-    label,
+    label: `${label}${index + 1}`,
     accountId,
     trainerId,
-    horses,
     students,
     lessonTypes,
     priceBands,
@@ -221,13 +221,57 @@ async function seedTenant(client, label) {
   };
 }
 
+async function seedAccount(client, label, trainerCount) {
+  const accountId = await one(client, `insert into accounts (name) values ($1) returning id`, [
+    `${label[0].toUpperCase() + label.slice(1)} Stables`,
+  ]);
+
+  // Same three names in both accounts. A horse read that forgets `account_id` returns six.
+  const horses = [];
+  for (const [name, active] of [["Comet", true], ["Willow", true], ["Dusty", false]]) {
+    horses.push(
+      await one(
+        client,
+        `insert into horses (account_id, name, active, rest_days_per_week, riding_styles,
+                             max_daily_minutes_overall)
+         values ($1, $2, $3, 1, '{English}', 180) returning id`,
+        [accountId, name, active],
+      ),
+    );
+  }
+
+  const trainers = [];
+  for (let index = 0; index < trainerCount; index++) {
+    trainers.push(await seedTrainer(client, { accountId, horses, label, index }));
+  }
+
+  return {
+    label,
+    accountId,
+    horses,
+    trainers,
+    // The union across the account's trainers. This is what an account-scoped read of a
+    // trainer-scoped table (horse welfare over `bookings`) is expected to return.
+    accountBookings: trainers.flatMap((t) => t.bookings),
+  };
+}
+
 /**
- * Seed both tenants and return the manifest the harness checks against.
- * Tenant "A" is the requesting tenant in every assertion; "B" is the one that must never
- * appear in a result.
+ * Two accounts: Alder with two trainers who share horses, Birch with one.
+ * @returns { alder, birch }
  */
-export async function seedTwoTenants(client) {
-  const a = await seedTenant(client, "Alder");
-  const b = await seedTenant(client, "Birch");
-  return { a, b };
+export async function seedAccounts(client) {
+  const alder = await seedAccount(client, "alder", 2);
+  const birch = await seedAccount(client, "birch", 1);
+  return { alder, birch };
+}
+
+/**
+ * The id sets one trainer may legitimately see, flattened into a single manifest so the
+ * harness can look up any entity set by name. Account-level sets are merged in, which is what
+ * lets `horses` resolve to the SAME array for two trainers of one account — the fact the
+ * account rule is asserted against.
+ */
+export function manifestFor(account, trainer) {
+  return { ...trainer, horses: account.horses, accountBookings: account.accountBookings };
 }

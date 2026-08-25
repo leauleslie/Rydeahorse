@@ -25,7 +25,7 @@
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { connect, truncateAll, assertMarked, acquireSuiteLock } from "./db.js";
-import { seedTwoTenants, SHARED_DATE } from "./seed.js";
+import { seedAccounts } from "./seed.js";
 
 // A date with no seeded lessons on it, so these tests never collide with the fixture.
 const DATE = "2026-10-06";
@@ -37,39 +37,24 @@ before(async () => {
   await acquireSuiteLock(setup);
   await assertMarked(setup);
   await truncateAll(setup);
-  const { a } = await seedTwoTenants(setup);
-
-  // A second trainer inside the SAME account, sharing the same horses. Constraint #1 excludes
-  // on horse_id with no tenant column, and this is what makes that testable: two coaches in
-  // one barn reaching for the same animal.
-  const { rows } = await setup.query(
-    `insert into trainers (account_id, name, email, timezone)
-     values ($1, $2, $3, $4) returning id`,
-    [a.accountId, "Second Coach", "coach+second@example.test", "America/Los_Angeles"],
-  );
-  const secondTrainerId = rows[0].id;
-  const { rows: lt } = await setup.query(
-    `insert into lesson_types (trainer_id, name, duration_min, ride_time_min, base_price,
-                               min_price, max_price)
-     values ($1, 'Private Lesson', 60, 45, 60, 55, 90) returning id`,
-    [secondTrainerId],
-  );
-  const { rows: st } = await setup.query(
-    `insert into students (trainer_id, name, emergency_contact_name, emergency_contact_phone,
-                           age, experience_level)
-     values ($1, 'Casey Vale', 'Pat Kin', '555-0100', 29, 'intermediate') returning id`,
-    [secondTrainerId],
-  );
+  // Alder now seeds two trainers sharing one set of horses, so the "two coaches in one barn"
+  // race below needs no hand-rolled fixture — it is the account shape the schema describes.
+  const { alder } = await seedAccounts(setup);
+  const [first, second] = alder.trainers;
 
   fixture = {
-    accountId: a.accountId,
-    trainerId: a.trainerId,
-    studentA: a.students[0],
-    studentB: a.students[1],
-    horseId: a.horses[0],
-    otherHorseId: a.horses[1],
-    lessonTypeId: a.lessonTypes[1],
-    second: { trainerId: secondTrainerId, lessonTypeId: lt[0].id, studentId: st[0].id },
+    accountId: alder.accountId,
+    trainerId: first.trainerId,
+    studentA: first.students[0],
+    studentB: first.students[1],
+    horseId: alder.horses[0],
+    otherHorseId: alder.horses[1],
+    lessonTypeId: first.lessonTypes[1],
+    second: {
+      trainerId: second.trainerId,
+      lessonTypeId: second.lessonTypes[1],
+      studentId: second.students[0],
+    },
   };
 
   observer = await connect();
