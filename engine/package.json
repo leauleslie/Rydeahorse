@@ -1,0 +1,11 @@
+{
+  "name": "@lesson-scheduler/engine",
+  "version": "0.1.0",
+  "description": "Rules and pricing engine. Pure, no React, no database, no ambient clock.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "UNLICENSED"
+}
