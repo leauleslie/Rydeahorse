@@ -1,0 +1,20 @@
+{
+  "name": "@lesson-scheduler/db",
+  "version": "0.1.0",
+  "description": "Postgres schema and migrations. Drizzle. The engine never sees this layer.",
+  "type": "module",
+  "main": "schema/index.js",
+  "scripts": {
+    "generate": "drizzle-kit generate",
+    "check": "drizzle-kit check",
+    "migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.6",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.5"
+  },
+  "license": "UNLICENSED"
+}

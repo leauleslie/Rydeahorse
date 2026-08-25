@@ -1,0 +1,7 @@
+# Local environment — secrets, never committed
+.env
+.env.local
+.env.*.local
+
+node_modules/
+.DS_Store

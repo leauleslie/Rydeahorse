@@ -1,0 +1,3370 @@
+{
+  "id": "b100808c-3751-446f-94ec-2cc96cb952e2",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.bookings": {
+      "name": "bookings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recurring_id": {
+          "name": "recurring_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lesson_type_id": {
+          "name": "lesson_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "date": {
+          "name": "date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "booking_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "base_price": {
+          "name": "base_price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "band_adjustment": {
+          "name": "band_adjustment",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "frequency_discount": {
+          "name": "frequency_discount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "offer_discount": {
+          "name": "offer_discount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "manual_adjustment": {
+          "name": "manual_adjustment",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "price": {
+          "name": "price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_billable": {
+          "name": "is_billable",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_new_student": {
+          "name": "is_new_student",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "bookings_trainer_date_idx": {
+          "name": "bookings_trainer_date_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bookings_horse_date_idx": {
+          "name": "bookings_horse_date_idx",
+          "columns": [
+            {
+              "expression": "horse_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bookings_student_date_idx": {
+          "name": "bookings_student_date_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bookings_recurring_idx": {
+          "name": "bookings_recurring_idx",
+          "columns": [
+            {
+              "expression": "recurring_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bookings_conversion_idx": {
+          "name": "bookings_conversion_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "start_time",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "bookings_trainer_id_trainers_id_fk": {
+          "name": "bookings_trainer_id_trainers_id_fk",
+          "tableFrom": "bookings",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "bookings_recurring_id_recurring_bookings_id_fk": {
+          "name": "bookings_recurring_id_recurring_bookings_id_fk",
+          "tableFrom": "bookings",
+          "tableTo": "recurring_bookings",
+          "columnsFrom": [
+            "recurring_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "bookings_student_id_students_id_fk": {
+          "name": "bookings_student_id_students_id_fk",
+          "tableFrom": "bookings",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "bookings_horse_id_horses_id_fk": {
+          "name": "bookings_horse_id_horses_id_fk",
+          "tableFrom": "bookings",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "bookings_lesson_type_id_lesson_types_id_fk": {
+          "name": "bookings_lesson_type_id_lesson_types_id_fk",
+          "tableFrom": "bookings",
+          "tableTo": "lesson_types",
+          "columnsFrom": [
+            "lesson_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "bookings_end_after_start": {
+          "name": "bookings_end_after_start",
+          "value": "\"bookings\".\"end_time\" > \"bookings\".\"start_time\""
+        },
+        "bookings_discounts_non_negative": {
+          "name": "bookings_discounts_non_negative",
+          "value": "\"bookings\".\"frequency_discount\" >= 0 and \"bookings\".\"offer_discount\" >= 0"
+        },
+        "bookings_price_non_negative": {
+          "name": "bookings_price_non_negative",
+          "value": "\"bookings\".\"price\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.offers": {
+      "name": "offers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "date": {
+          "name": "date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lesson_type_id": {
+          "name": "lesson_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lesson_id": {
+          "name": "lesson_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "riding_window_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "offer_discount": {
+          "name": "offer_discount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "offer_reason": {
+          "name": "offer_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "offered_at": {
+          "name": "offered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "response": {
+          "name": "response",
+          "type": "offer_response",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rank": {
+          "name": "rank",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "offers_trainer_date_idx": {
+          "name": "offers_trainer_date_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "offers_trainer_id_trainers_id_fk": {
+          "name": "offers_trainer_id_trainers_id_fk",
+          "tableFrom": "offers",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "offers_student_id_students_id_fk": {
+          "name": "offers_student_id_students_id_fk",
+          "tableFrom": "offers",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "offers_horse_id_horses_id_fk": {
+          "name": "offers_horse_id_horses_id_fk",
+          "tableFrom": "offers",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "offers_lesson_type_id_lesson_types_id_fk": {
+          "name": "offers_lesson_type_id_lesson_types_id_fk",
+          "tableFrom": "offers",
+          "tableTo": "lesson_types",
+          "columnsFrom": [
+            "lesson_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "offers_lesson_id_bookings_id_fk": {
+          "name": "offers_lesson_id_bookings_id_fk",
+          "tableFrom": "offers",
+          "tableTo": "bookings",
+          "columnsFrom": [
+            "lesson_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "offers_one_per_student_slot": {
+          "name": "offers_one_per_student_slot",
+          "nullsNotDistinct": false,
+          "columns": [
+            "student_id",
+            "date",
+            "start_time"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "offers_discount_non_negative": {
+          "name": "offers_discount_non_negative",
+          "value": "\"offers\".\"offer_discount\" is null or \"offers\".\"offer_discount\" >= 0"
+        },
+        "offers_rank_positive": {
+          "name": "offers_rank_positive",
+          "value": "\"offers\".\"rank\" is null or \"offers\".\"rank\" >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.recurring_bookings": {
+      "name": "recurring_bookings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lesson_type_id": {
+          "name": "lesson_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_of_week": {
+          "name": "day_of_week",
+          "type": "day_of_week",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "recurring_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_date": {
+          "name": "end_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "recurring_bookings_trainer_idx": {
+          "name": "recurring_bookings_trainer_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "recurring_bookings_student_idx": {
+          "name": "recurring_bookings_student_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "recurring_bookings_horse_idx": {
+          "name": "recurring_bookings_horse_idx",
+          "columns": [
+            {
+              "expression": "horse_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "recurring_bookings_trainer_id_trainers_id_fk": {
+          "name": "recurring_bookings_trainer_id_trainers_id_fk",
+          "tableFrom": "recurring_bookings",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "recurring_bookings_student_id_students_id_fk": {
+          "name": "recurring_bookings_student_id_students_id_fk",
+          "tableFrom": "recurring_bookings",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "recurring_bookings_horse_id_horses_id_fk": {
+          "name": "recurring_bookings_horse_id_horses_id_fk",
+          "tableFrom": "recurring_bookings",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "recurring_bookings_lesson_type_id_lesson_types_id_fk": {
+          "name": "recurring_bookings_lesson_type_id_lesson_types_id_fk",
+          "tableFrom": "recurring_bookings",
+          "tableTo": "lesson_types",
+          "columnsFrom": [
+            "lesson_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "recurring_bookings_end_after_start": {
+          "name": "recurring_bookings_end_after_start",
+          "value": "\"recurring_bookings\".\"end_date\" is null or \"recurring_bookings\".\"end_date\" >= \"recurring_bookings\".\"start_date\""
+        },
+        "recurring_bookings_ended_has_end_date": {
+          "name": "recurring_bookings_ended_has_end_date",
+          "value": "\"recurring_bookings\".\"status\" = 'active' or \"recurring_bookings\".\"end_date\" is not null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.substitution_assignments": {
+      "name": "substitution_assignments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "period_id": {
+          "name": "period_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recurring_id": {
+          "name": "recurring_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "booking_id": {
+          "name": "booking_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "substitute_horse_id": {
+          "name": "substitute_horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confirmed": {
+          "name": "confirmed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "substitution_assignments_period_idx": {
+          "name": "substitution_assignments_period_idx",
+          "columns": [
+            {
+              "expression": "period_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "substitution_assignments_recurring_idx": {
+          "name": "substitution_assignments_recurring_idx",
+          "columns": [
+            {
+              "expression": "recurring_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "substitution_assignments_period_id_horse_inactive_periods_id_fk": {
+          "name": "substitution_assignments_period_id_horse_inactive_periods_id_fk",
+          "tableFrom": "substitution_assignments",
+          "tableTo": "horse_inactive_periods",
+          "columnsFrom": [
+            "period_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "substitution_assignments_recurring_id_recurring_bookings_id_fk": {
+          "name": "substitution_assignments_recurring_id_recurring_bookings_id_fk",
+          "tableFrom": "substitution_assignments",
+          "tableTo": "recurring_bookings",
+          "columnsFrom": [
+            "recurring_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "substitution_assignments_booking_id_bookings_id_fk": {
+          "name": "substitution_assignments_booking_id_bookings_id_fk",
+          "tableFrom": "substitution_assignments",
+          "tableTo": "bookings",
+          "columnsFrom": [
+            "booking_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "substitution_assignments_substitute_horse_id_horses_id_fk": {
+          "name": "substitution_assignments_substitute_horse_id_horses_id_fk",
+          "tableFrom": "substitution_assignments",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "substitute_horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "substitution_assignments_exactly_one_target": {
+          "name": "substitution_assignments_exactly_one_target",
+          "value": "num_nonnulls(\"substitution_assignments\".\"recurring_id\", \"substitution_assignments\".\"booking_id\") = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.disclosure_acceptances": {
+      "name": "disclosure_acceptances",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "signed_name": {
+          "name": "signed_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "disclosure_acceptances_accepted_idx": {
+          "name": "disclosure_acceptances_accepted_idx",
+          "columns": [
+            {
+              "expression": "accepted_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "disclosure_acceptances_student_id_students_id_fk": {
+          "name": "disclosure_acceptances_student_id_students_id_fk",
+          "tableFrom": "disclosure_acceptances",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "disclosure_acceptances_student_key": {
+          "name": "disclosure_acceptances_student_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "student_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.disclosure_sections": {
+      "name": "disclosure_sections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "included": {
+          "name": "included",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "position": {
+          "name": "position",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "disclosure_sections_trainer_fk": {
+          "name": "disclosure_sections_trainer_fk",
+          "tableFrom": "disclosure_sections",
+          "tableTo": "disclosures",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "trainer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "disclosure_sections_key_per_trainer": {
+          "name": "disclosure_sections_key_per_trainer",
+          "nullsNotDistinct": false,
+          "columns": [
+            "trainer_id",
+            "key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.disclosures": {
+      "name": "disclosures",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "update_note": {
+          "name": "update_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_published_at": {
+          "name": "first_published_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "disclosures_trainer_id_trainers_id_fk": {
+          "name": "disclosures_trainer_id_trainers_id_fk",
+          "tableFrom": "disclosures",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "disclosures_trainer_key": {
+          "name": "disclosures_trainer_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "trainer_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.horse_inactive_periods": {
+      "name": "horse_inactive_periods",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estimated_end_date": {
+          "name": "estimated_end_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_end_date": {
+          "name": "actual_end_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "inactive_period_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "horse_inactive_periods_horse_idx": {
+          "name": "horse_inactive_periods_horse_idx",
+          "columns": [
+            {
+              "expression": "horse_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "start_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "horse_inactive_periods_account_id_accounts_id_fk": {
+          "name": "horse_inactive_periods_account_id_accounts_id_fk",
+          "tableFrom": "horse_inactive_periods",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "horse_inactive_periods_horse_id_horses_id_fk": {
+          "name": "horse_inactive_periods_horse_id_horses_id_fk",
+          "tableFrom": "horse_inactive_periods",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "horse_inactive_periods_end_after_start": {
+          "name": "horse_inactive_periods_end_after_start",
+          "value": "\"horse_inactive_periods\".\"actual_end_date\" is null or \"horse_inactive_periods\".\"actual_end_date\" >= \"horse_inactive_periods\".\"start_date\""
+        },
+        "horse_inactive_periods_ended_has_actual_end": {
+          "name": "horse_inactive_periods_ended_has_actual_end",
+          "value": "(\"horse_inactive_periods\".\"status\" = 'ended') = (\"horse_inactive_periods\".\"actual_end_date\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.horses": {
+      "name": "horses",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "min_experience_level": {
+          "name": "min_experience_level",
+          "type": "experience_level",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'beginner'"
+        },
+        "adult_only": {
+          "name": "adult_only",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "riding_styles": {
+          "name": "riding_styles",
+          "type": "riding_style[]",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'"
+        },
+        "max_rider_weight_lbs": {
+          "name": "max_rider_weight_lbs",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rest_days_per_week": {
+          "name": "rest_days_per_week",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "max_daily_minutes_adult": {
+          "name": "max_daily_minutes_adult",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_daily_minutes_overall": {
+          "name": "max_daily_minutes_overall",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "horses_account_idx": {
+          "name": "horses_account_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "horses_account_id_accounts_id_fk": {
+          "name": "horses_account_id_accounts_id_fk",
+          "tableFrom": "horses",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "horses_rest_days_in_range": {
+          "name": "horses_rest_days_in_range",
+          "value": "\"horses\".\"rest_days_per_week\" >= 0 and \"horses\".\"rest_days_per_week\" <= 7"
+        },
+        "horses_adult_cap_within_overall": {
+          "name": "horses_adult_cap_within_overall",
+          "value": "\"horses\".\"max_daily_minutes_adult\" is null\n          or \"horses\".\"max_daily_minutes_overall\" is null\n          or \"horses\".\"max_daily_minutes_adult\" <= \"horses\".\"max_daily_minutes_overall\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.auth_codes": {
+      "name": "auth_codes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code_hash": {
+          "name": "code_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "auth_codes_phone_idx": {
+          "name": "auth_codes_phone_idx",
+          "columns": [
+            {
+              "expression": "phone",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.auth_identities": {
+      "name": "auth_identities",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "auth_identities_phone_key": {
+          "name": "auth_identities_phone_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "phone"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.accounts": {
+      "name": "accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.trainers": {
+      "name": "trainers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scheduling_preference": {
+          "name": "scheduling_preference",
+          "type": "scheduling_preference",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'spaced'"
+        },
+        "min_buffer_min": {
+          "name": "min_buffer_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "max_buffer_min": {
+          "name": "max_buffer_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_back_to_back": {
+          "name": "max_back_to_back",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "late_cancel_hours": {
+          "name": "late_cancel_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 24
+        },
+        "prioritization_rule": {
+          "name": "prioritization_rule",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "frequency_tier1_min_rides": {
+          "name": "frequency_tier1_min_rides",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "frequency_tier2_min_rides": {
+          "name": "frequency_tier2_min_rides",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "trainers_account_id_accounts_id_fk": {
+          "name": "trainers_account_id_accounts_id_fk",
+          "tableFrom": "trainers",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "trainers_email_key": {
+          "name": "trainers_email_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "trainers_tier_2_above_tier_1": {
+          "name": "trainers_tier_2_above_tier_1",
+          "value": "\"trainers\".\"frequency_tier1_min_rides\" is null\n          or \"trainers\".\"frequency_tier2_min_rides\" is null\n          or \"trainers\".\"frequency_tier2_min_rides\" > \"trainers\".\"frequency_tier1_min_rides\""
+        },
+        "trainers_buffers_non_negative": {
+          "name": "trainers_buffers_non_negative",
+          "value": "\"trainers\".\"min_buffer_min\" >= 0\n          and (\"trainers\".\"max_buffer_min\" is null or \"trainers\".\"max_buffer_min\" >= \"trainers\".\"min_buffer_min\")"
+        },
+        "trainers_late_cancel_hours_positive": {
+          "name": "trainers_late_cancel_hours_positive",
+          "value": "\"trainers\".\"late_cancel_hours\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.trainer_availability": {
+      "name": "trainer_availability",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_of_week": {
+          "name": "day_of_week",
+          "type": "day_of_week",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "trainer_availability_lookup_idx": {
+          "name": "trainer_availability_lookup_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "day_of_week",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "trainer_availability_trainer_id_trainers_id_fk": {
+          "name": "trainer_availability_trainer_id_trainers_id_fk",
+          "tableFrom": "trainer_availability",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "trainer_availability_end_after_start": {
+          "name": "trainer_availability_end_after_start",
+          "value": "\"trainer_availability\".\"end_time\" > \"trainer_availability\".\"start_time\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.trainer_time_off": {
+      "name": "trainer_time_off",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_date": {
+          "name": "end_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "trainer_time_off_lookup_idx": {
+          "name": "trainer_time_off_lookup_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "start_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "end_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "trainer_time_off_trainer_id_trainers_id_fk": {
+          "name": "trainer_time_off_trainer_id_trainers_id_fk",
+          "tableFrom": "trainer_time_off",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "trainer_time_off_end_after_start": {
+          "name": "trainer_time_off_end_after_start",
+          "value": "\"trainer_time_off\".\"end_date\" >= \"trainer_time_off\".\"start_date\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.lesson_type_band_adjustments": {
+      "name": "lesson_type_band_adjustments",
+      "schema": "",
+      "columns": {
+        "lesson_type_id": {
+          "name": "lesson_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "band_id": {
+          "name": "band_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "lesson_type_band_adjustments_lesson_type_fk": {
+          "name": "lesson_type_band_adjustments_lesson_type_fk",
+          "tableFrom": "lesson_type_band_adjustments",
+          "tableTo": "lesson_types",
+          "columnsFrom": [
+            "lesson_type_id",
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id",
+            "trainer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "lesson_type_band_adjustments_band_fk": {
+          "name": "lesson_type_band_adjustments_band_fk",
+          "tableFrom": "lesson_type_band_adjustments",
+          "tableTo": "price_bands",
+          "columnsFrom": [
+            "band_id",
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id",
+            "trainer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "lesson_type_band_adjustments_lesson_type_id_band_id_pk": {
+          "name": "lesson_type_band_adjustments_lesson_type_id_band_id_pk",
+          "columns": [
+            "lesson_type_id",
+            "band_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.lesson_type_restricted_horses": {
+      "name": "lesson_type_restricted_horses",
+      "schema": "",
+      "columns": {
+        "lesson_type_id": {
+          "name": "lesson_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "lesson_type_restricted_horses_lesson_type_id_lesson_types_id_fk": {
+          "name": "lesson_type_restricted_horses_lesson_type_id_lesson_types_id_fk",
+          "tableFrom": "lesson_type_restricted_horses",
+          "tableTo": "lesson_types",
+          "columnsFrom": [
+            "lesson_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "lesson_type_restricted_horses_horse_id_horses_id_fk": {
+          "name": "lesson_type_restricted_horses_horse_id_horses_id_fk",
+          "tableFrom": "lesson_type_restricted_horses",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "lesson_type_restricted_horses_lesson_type_id_horse_id_pk": {
+          "name": "lesson_type_restricted_horses_lesson_type_id_horse_id_pk",
+          "columns": [
+            "lesson_type_id",
+            "horse_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.lesson_types": {
+      "name": "lesson_types",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "duration_min": {
+          "name": "duration_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ride_time_min": {
+          "name": "ride_time_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_group": {
+          "name": "is_group",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "max_group_size": {
+          "name": "max_group_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_intro": {
+          "name": "is_intro",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "base_price": {
+          "name": "base_price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "min_price": {
+          "name": "min_price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_price": {
+          "name": "max_price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "frequency_discount1": {
+          "name": "frequency_discount1",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "frequency_discount2": {
+          "name": "frequency_discount2",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gap_fill_discount": {
+          "name": "gap_fill_discount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "potential_lesson_eligible": {
+          "name": "potential_lesson_eligible",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "riding_styles": {
+          "name": "riding_styles",
+          "type": "riding_style[]",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "lesson_types_trainer_idx": {
+          "name": "lesson_types_trainer_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "lesson_types_one_intro_per_trainer": {
+          "name": "lesson_types_one_intro_per_trainer",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"lesson_types\".\"is_intro\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "lesson_types_trainer_id_trainers_id_fk": {
+          "name": "lesson_types_trainer_id_trainers_id_fk",
+          "tableFrom": "lesson_types",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "lesson_types_id_trainer_key": {
+          "name": "lesson_types_id_trainer_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "trainer_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "lesson_types_ride_time_within_duration": {
+          "name": "lesson_types_ride_time_within_duration",
+          "value": "\"lesson_types\".\"ride_time_min\" > 0 and \"lesson_types\".\"ride_time_min\" <= \"lesson_types\".\"duration_min\""
+        },
+        "lesson_types_price_floor_below_ceiling": {
+          "name": "lesson_types_price_floor_below_ceiling",
+          "value": "\"lesson_types\".\"min_price\" <= \"lesson_types\".\"max_price\""
+        },
+        "lesson_types_prices_non_negative": {
+          "name": "lesson_types_prices_non_negative",
+          "value": "\"lesson_types\".\"base_price\" >= 0 and \"lesson_types\".\"min_price\" >= 0"
+        },
+        "lesson_types_discounts_non_negative": {
+          "name": "lesson_types_discounts_non_negative",
+          "value": "(\"lesson_types\".\"frequency_discount1\" is null or \"lesson_types\".\"frequency_discount1\" >= 0)\n          and (\"lesson_types\".\"frequency_discount2\" is null or \"lesson_types\".\"frequency_discount2\" >= 0)\n          and (\"lesson_types\".\"gap_fill_discount\" is null or \"lesson_types\".\"gap_fill_discount\" >= 0)"
+        },
+        "lesson_types_group_has_capacity": {
+          "name": "lesson_types_group_has_capacity",
+          "value": "(\"lesson_types\".\"is_group\" and \"lesson_types\".\"max_group_size\" is not null and \"lesson_types\".\"max_group_size\" > 1)\n          or (not \"lesson_types\".\"is_group\" and \"lesson_types\".\"max_group_size\" is null)"
+        },
+        "lesson_types_group_never_potential": {
+          "name": "lesson_types_group_never_potential",
+          "value": "not (\"lesson_types\".\"is_group\" and \"lesson_types\".\"potential_lesson_eligible\")"
+        },
+        "lesson_types_intro_not_group": {
+          "name": "lesson_types_intro_not_group",
+          "value": "not (\"lesson_types\".\"is_intro\" and \"lesson_types\".\"is_group\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.price_band_windows": {
+      "name": "price_band_windows",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "band_id": {
+          "name": "band_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_of_week": {
+          "name": "day_of_week",
+          "type": "day_of_week",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "price_band_windows_lookup_idx": {
+          "name": "price_band_windows_lookup_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "day_of_week",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "price_band_windows_band_fk": {
+          "name": "price_band_windows_band_fk",
+          "tableFrom": "price_band_windows",
+          "tableTo": "price_bands",
+          "columnsFrom": [
+            "band_id",
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id",
+            "trainer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "price_band_windows_end_after_start": {
+          "name": "price_band_windows_end_after_start",
+          "value": "\"price_band_windows\".\"end_time\" > \"price_band_windows\".\"start_time\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.price_bands": {
+      "name": "price_bands",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "price_bands_trainer_idx": {
+          "name": "price_bands_trainer_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "price_bands_trainer_id_trainers_id_fk": {
+          "name": "price_bands_trainer_id_trainers_id_fk",
+          "tableFrom": "price_bands",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "price_bands_id_trainer_key": {
+          "name": "price_bands_id_trainer_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "trainer_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.student_alerts": {
+      "name": "student_alerts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "alert_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detail": {
+          "name": "detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "seen": {
+          "name": "seen",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        }
+      },
+      "indexes": {
+        "student_alerts_feed_idx": {
+          "name": "student_alerts_feed_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "student_alerts_student_id_students_id_fk": {
+          "name": "student_alerts_student_id_students_id_fk",
+          "tableFrom": "student_alerts",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.student_no_ride_horses": {
+      "name": "student_no_ride_horses",
+      "schema": "",
+      "columns": {
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "horse_id": {
+          "name": "horse_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "student_no_ride_horses_student_id_students_id_fk": {
+          "name": "student_no_ride_horses_student_id_students_id_fk",
+          "tableFrom": "student_no_ride_horses",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "student_no_ride_horses_horse_id_horses_id_fk": {
+          "name": "student_no_ride_horses_horse_id_horses_id_fk",
+          "tableFrom": "student_no_ride_horses",
+          "tableTo": "horses",
+          "columnsFrom": [
+            "horse_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "student_no_ride_horses_student_id_horse_id_pk": {
+          "name": "student_no_ride_horses_student_id_horse_id_pk",
+          "columns": [
+            "student_id",
+            "horse_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.student_notes": {
+      "name": "student_notes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "category": {
+          "name": "category",
+          "type": "note_category",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "note_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "student_notes_open_idx": {
+          "name": "student_notes_open_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "student_notes_student_id_students_id_fk": {
+          "name": "student_notes_student_id_students_id_fk",
+          "tableFrom": "student_notes",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.student_riding_windows": {
+      "name": "student_riding_windows",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "riding_window_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_of_week": {
+          "name": "day_of_week",
+          "type": "day_of_week",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "student_riding_windows_lookup_idx": {
+          "name": "student_riding_windows_lookup_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "day_of_week",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "student_riding_windows_student_id_students_id_fk": {
+          "name": "student_riding_windows_student_id_students_id_fk",
+          "tableFrom": "student_riding_windows",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "student_riding_windows_end_after_start": {
+          "name": "student_riding_windows_end_after_start",
+          "value": "\"student_riding_windows\".\"end_time\" > \"student_riding_windows\".\"start_time\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.students": {
+      "name": "students",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_identity_id": {
+          "name": "auth_identity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guardian_name": {
+          "name": "guardian_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guardian_phone": {
+          "name": "guardian_phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guardian_email": {
+          "name": "guardian_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guardian_relationship": {
+          "name": "guardian_relationship",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "emergency_contact_name": {
+          "name": "emergency_contact_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "emergency_contact_phone": {
+          "name": "emergency_contact_phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "age": {
+          "name": "age",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experience_level": {
+          "name": "experience_level",
+          "type": "experience_level",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "riding_styles": {
+          "name": "riding_styles",
+          "type": "riding_style[]",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'"
+        },
+        "weight": {
+          "name": "weight",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notification_preference": {
+          "name": "notification_preference",
+          "type": "notification_preference",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'target_and_potential'"
+        },
+        "frequency_tier": {
+          "name": "frequency_tier",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "frequency_tier_effective_month": {
+          "name": "frequency_tier_effective_month",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "profile_status": {
+          "name": "profile_status",
+          "type": "profile_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending_review'"
+        },
+        "recurring_potential_unlocked": {
+          "name": "recurring_potential_unlocked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "students_trainer_idx": {
+          "name": "students_trainer_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "students_identity_idx": {
+          "name": "students_identity_idx",
+          "columns": [
+            {
+              "expression": "auth_identity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "students_trainer_id_trainers_id_fk": {
+          "name": "students_trainer_id_trainers_id_fk",
+          "tableFrom": "students",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "students_auth_identity_id_auth_identities_id_fk": {
+          "name": "students_auth_identity_id_auth_identities_id_fk",
+          "tableFrom": "students",
+          "tableTo": "auth_identities",
+          "columnsFrom": [
+            "auth_identity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "students_age_non_negative": {
+          "name": "students_age_non_negative",
+          "value": "\"students\".\"age\" >= 0"
+        },
+        "students_weight_positive": {
+          "name": "students_weight_positive",
+          "value": "\"students\".\"weight\" is null or \"students\".\"weight\" > 0"
+        },
+        "students_frequency_tier_range": {
+          "name": "students_frequency_tier_range",
+          "value": "\"students\".\"frequency_tier\" between 0 and 2"
+        },
+        "students_tier_has_effective_month": {
+          "name": "students_tier_has_effective_month",
+          "value": "\"students\".\"frequency_tier\" = 0 or \"students\".\"frequency_tier_effective_month\" is not null"
+        },
+        "students_effective_month_is_first_of_month": {
+          "name": "students_effective_month_is_first_of_month",
+          "value": "\"students\".\"frequency_tier_effective_month\" is null\n          or extract(day from \"students\".\"frequency_tier_effective_month\") = 1"
+        },
+        "students_minor_has_guardian": {
+          "name": "students_minor_has_guardian",
+          "value": "\"students\".\"age\" >= 18\n          or (\"students\".\"guardian_name\" is not null and \"students\".\"guardian_phone\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.message_log": {
+      "name": "message_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trainer_id": {
+          "name": "trainer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "channel": {
+          "name": "channel",
+          "type": "message_channel",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "direction": {
+          "name": "direction",
+          "type": "message_direction",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "message_text": {
+          "name": "message_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "related_lesson_id": {
+          "name": "related_lesson_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "message_log_student_idx": {
+          "name": "message_log_student_idx",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sent_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "message_log_trainer_idx": {
+          "name": "message_log_trainer_idx",
+          "columns": [
+            {
+              "expression": "trainer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sent_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "message_log_trainer_id_trainers_id_fk": {
+          "name": "message_log_trainer_id_trainers_id_fk",
+          "tableFrom": "message_log",
+          "tableTo": "trainers",
+          "columnsFrom": [
+            "trainer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "message_log_student_id_students_id_fk": {
+          "name": "message_log_student_id_students_id_fk",
+          "tableFrom": "message_log",
+          "tableTo": "students",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "message_log_related_lesson_id_bookings_id_fk": {
+          "name": "message_log_related_lesson_id_bookings_id_fk",
+          "tableFrom": "message_log",
+          "tableTo": "bookings",
+          "columnsFrom": [
+            "related_lesson_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.alert_kind": {
+      "name": "alert_kind",
+      "schema": "public",
+      "values": [
+        "lesson_cancelled",
+        "no_show",
+        "recurring_ended",
+        "lesson_moved",
+        "substitute_horse",
+        "recurring_changed",
+        "no_ride_changed",
+        "booking_created",
+        "recurring_created",
+        "offer",
+        "price_changed",
+        "rate_changed"
+      ]
+    },
+    "public.booking_status": {
+      "name": "booking_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "confirmed",
+        "completed",
+        "no_show",
+        "late_cancel",
+        "early_cancel"
+      ]
+    },
+    "public.day_of_week": {
+      "name": "day_of_week",
+      "schema": "public",
+      "values": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ]
+    },
+    "public.experience_level": {
+      "name": "experience_level",
+      "schema": "public",
+      "values": [
+        "beginner",
+        "intermediate",
+        "advanced"
+      ]
+    },
+    "public.inactive_period_status": {
+      "name": "inactive_period_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "ended"
+      ]
+    },
+    "public.message_channel": {
+      "name": "message_channel",
+      "schema": "public",
+      "values": [
+        "sms",
+        "web"
+      ]
+    },
+    "public.message_direction": {
+      "name": "message_direction",
+      "schema": "public",
+      "values": [
+        "in",
+        "out"
+      ]
+    },
+    "public.note_category": {
+      "name": "note_category",
+      "schema": "public",
+      "values": [
+        "intro_lesson_no_fit",
+        "recurring_lesson_no_fit",
+        "message"
+      ]
+    },
+    "public.note_status": {
+      "name": "note_status",
+      "schema": "public",
+      "values": [
+        "open",
+        "resolved"
+      ]
+    },
+    "public.notification_preference": {
+      "name": "notification_preference",
+      "schema": "public",
+      "values": [
+        "target_only",
+        "target_and_potential",
+        "all"
+      ]
+    },
+    "public.offer_response": {
+      "name": "offer_response",
+      "schema": "public",
+      "values": [
+        "accepted",
+        "declined",
+        "no_response"
+      ]
+    },
+    "public.profile_status": {
+      "name": "profile_status",
+      "schema": "public",
+      "values": [
+        "pending_review",
+        "approved"
+      ]
+    },
+    "public.recurring_status": {
+      "name": "recurring_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "ended"
+      ]
+    },
+    "public.riding_style": {
+      "name": "riding_style",
+      "schema": "public",
+      "values": [
+        "English",
+        "Western"
+      ]
+    },
+    "public.riding_window_kind": {
+      "name": "riding_window_kind",
+      "schema": "public",
+      "values": [
+        "target",
+        "potential"
+      ]
+    },
+    "public.scheduling_preference": {
+      "name": "scheduling_preference",
+      "schema": "public",
+      "values": [
+        "back_to_back",
+        "spaced"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
