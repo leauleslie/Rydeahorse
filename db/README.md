@@ -4,10 +4,13 @@ Drizzle over Postgres. `schema.md` is the decision record for this layer; where 
 that document disagree, the bug is here. `product-foundations.md` remains the source of truth
 for product behaviour, and Section 8 is what every table below is a translation of.
 
-There is still no client, no pool and no repository here — only the schema definitions, the SQL
-generated from them, and the migration runner that applies it. `npm run migrate` connects; it is
-the only thing in this directory that does. `schema.md` Section 6 records the driver choice and
-why the three connection strings are not interchangeable.
+`schema.md` Section 6 records the driver choice and why the three connection strings are not
+interchangeable.
+
+`repo/` holds the tenant-scoped reads — the one layer that knows which coach is asking — and
+`test/` holds the suites that run against a real Postgres branch. Both are new; see
+`test/README.md` for how the test database is protected from being production, and for the
+one-line way to add a query to the tenant-isolation harness.
 
 ```
 drizzle.config.js              drizzle-kit's input. `generate` never opens a connection.
@@ -26,6 +29,13 @@ schema/
 migrations/
   0000_initial_schema.sql      Generated. 26 tables, 16 enums, constraints #2 and #3.
   0001_exclusion_constraints.sql   Hand-written. btree_gist, timerange, constraints #1 and #4.
+repo/
+  index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once.
+test/
+  guard.js / db.js             The two-layer refusal to run against production.
+  seed.js                      Two deliberately indistinguishable tenants.
+  concurrency.test.js          Constraint #1 proved against a real race.
+  tenancy.test.js              Isolation harness over the registry in tenant-queries.js.
 ```
 
 ```bash
