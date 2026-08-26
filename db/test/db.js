@@ -32,9 +32,45 @@ const CORE_TABLES = ["accounts", "trainers", "horses", "students", "bookings"];
 // (including on a crash). A second suite blocks in `before` until the first is done.
 const SUITE_LOCK_KEY = "8274611903482";
 
-/** Serialize whole suites against this database. Call once, before truncating. */
-export async function acquireSuiteLock(client) {
-  await client.query("select pg_advisory_lock($1::bigint)", [SUITE_LOCK_KEY]);
+/**
+ * Serialize whole suites against this database. Call once, before truncating, and pair it
+ * with releaseSuiteLock.
+ *
+ * Two details, both learned the hard way:
+ *
+ * A session-level advisory lock is released when the session ends — but on Neon "the session
+ * ends" is not prompt. Closing the socket does not immediately reap the backend, so a lock
+ * left to be cleaned up by disconnection can keep the NEXT suite waiting for minutes. Hence
+ * releaseSuiteLock, called explicitly before the connection closes. Relying on the implicit
+ * release is what turned a 7-second suite into a 4-minute one.
+ *
+ * And this polls `pg_try_advisory_lock` rather than blocking in `pg_advisory_lock`, so a lock
+ * genuinely stuck behind a crashed run fails with a message that says so instead of hanging
+ * forever with no output.
+ */
+export async function acquireSuiteLock(client, timeoutMs = 120000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { rows } = await client.query("select pg_try_advisory_lock($1::bigint) as got", [
+      SUITE_LOCK_KEY,
+    ]);
+    if (rows[0].got) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the suite lock on the test ` +
+          `database.\nAnother suite is still running, or a previous run died holding it — an ` +
+          `advisory lock is released when its backend exits, which on Neon can lag a closed ` +
+          `socket by minutes.\nCheck for stragglers:\n` +
+          `  select pid, state, query from pg_stat_activity where datname = current_database();`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+/** Release the suite lock. Call in `after`, BEFORE closing the connection. */
+export async function releaseSuiteLock(client) {
+  await client.query("select pg_advisory_unlock($1::bigint)", [SUITE_LOCK_KEY]);
 }
 
 /** Open a raw client against the guarded test database. Refuses before opening a socket. */

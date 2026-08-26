@@ -16,7 +16,7 @@
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { connectDrizzle, truncateAll, assertMarked, acquireSuiteLock } from "./db.js";
+import { connectDrizzle, truncateAll, assertMarked, acquireSuiteLock, releaseSuiteLock } from "./db.js";
 import { seedAccounts, manifestFor } from "./seed.js";
 import { forTenant } from "../repo/index.js";
 import { TENANT_READS } from "./tenant-queries.js";
@@ -45,6 +45,8 @@ before(async () => {
 });
 
 after(async () => {
+  // Release before closing — see acquireSuiteLock.
+  if (client) await releaseSuiteLock(client).catch(() => {});
   await client?.end();
 });
 

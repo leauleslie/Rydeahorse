@@ -24,7 +24,7 @@
 // serialized ordering is ruled out rather than assumed.
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { connect, truncateAll, assertMarked, acquireSuiteLock } from "./db.js";
+import { connect, truncateAll, assertMarked, acquireSuiteLock, releaseSuiteLock } from "./db.js";
 import { seedAccounts } from "./seed.js";
 
 // A date with no seeded lessons on it, so these tests never collide with the fixture.
@@ -61,6 +61,9 @@ before(async () => {
 });
 
 after(async () => {
+  // Release before closing: an advisory lock outlives a closed socket until Neon reaps the
+  // backend, which can block the next suite for minutes.
+  if (setup) await releaseSuiteLock(setup).catch(() => {});
   await setup?.end();
   await observer?.end();
 });

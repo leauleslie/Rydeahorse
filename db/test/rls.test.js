@@ -37,7 +37,7 @@
 // set_config(name, value, is_local => true), which parameterises safely.
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { connectDrizzle, connect, truncateAll, assertMarked, acquireSuiteLock } from "./db.js";
+import { connectDrizzle, connect, truncateAll, assertMarked, acquireSuiteLock, releaseSuiteLock } from "./db.js";
 import { seedAccounts } from "./seed.js";
 import { students, horses, bookings, studentAlerts } from "../schema/index.js";
 import { withTenantTransaction } from "../repo/index.js";
@@ -58,6 +58,8 @@ before(async () => {
 });
 
 after(async () => {
+  // Release before closing — see acquireSuiteLock.
+  if (client) await releaseSuiteLock(client).catch(() => {});
   await client?.end();
 });
 
