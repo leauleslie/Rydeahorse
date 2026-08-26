@@ -29,13 +29,15 @@ schema/
 migrations/
   0000_initial_schema.sql      Generated. 26 tables, 16 enums, constraints #2 and #3.
   0001_exclusion_constraints.sql   Hand-written. btree_gist, timerange, constraints #1 and #4.
+  0002_row_level_security.sql      Hand-written. The app role, 24 tables under RLS, 24 policies.
 repo/
   index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once.
 test/
   guard.js / db.js             The two-layer refusal to run against production.
-  seed.js                      Two deliberately indistinguishable tenants.
+  seed.js                      Three trainers across two accounts; a1 and a2 share horses.
   concurrency.test.js          Constraint #1 proved against a real race.
   tenancy.test.js              Isolation harness over the registry in tenant-queries.js.
+  rls.test.js                  The same isolation, proved against raw queries that bypass repo/.
 ```
 
 ```bash

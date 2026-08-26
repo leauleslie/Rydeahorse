@@ -15,6 +15,13 @@
       "when": 1787676845814,
       "tag": "0001_exclusion_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787676845815,
+      "tag": "0002_row_level_security",
+      "breakpoints": true
     }
   ]
 }

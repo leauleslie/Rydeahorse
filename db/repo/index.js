@@ -38,6 +38,56 @@ import {
 } from "../schema/index.js";
 
 /**
+ * Open a tenant-scoped transaction and run `fn` inside it.
+ *
+ * This is the sanctioned way to touch the database, and the only shape under which the
+ * row-level security policies from migration 0002 actually apply. Three things happen here,
+ * and each of them is load-bearing:
+ *
+ *   BEGIN               An EXPLICIT transaction. `SET LOCAL` outside one applies to the
+ *                       implicit single-statement transaction and is discarded before the next
+ *                       statement — so a caller without this gets zero rows rather than
+ *                       another tenant's, but gets nothing useful either.
+ *
+ *   SET LOCAL ROLE      RLS does not apply to a table's owner, and on Neon the owner also
+ *                       carries BYPASSRLS. Running as the connecting role would leave every
+ *                       policy inert. `rydeahorse_app` is NOLOGIN and exists only to be
+ *                       switched into.
+ *
+ *   set_config(…, true) The tenant identity, transaction-local. `true` is the `is_local`
+ *                       argument, and it is the whole difference between safe and unsafe under
+ *                       a transaction-mode pooler: Neon's pooled endpoint hands the backend to
+ *                       a DIFFERENT client between transactions, so a session-level setting
+ *                       becomes the next request's identity. A value cannot be interpolated
+ *                       into `SET LOCAL`, which is why this is set_config rather than SQL.
+ *
+ * All three are reverted at COMMIT or ROLLBACK, which is exactly the unit the pooler recycles.
+ *
+ * @param client  a node-postgres Client (or a pool client already checked out — it must be ONE
+ *                connection for the duration, or SET LOCAL lands on a different backend than
+ *                the queries)
+ * @param tenant  { accountId, trainerId }
+ * @param fn      receives nothing; run queries on the same client/drizzle handle
+ */
+export async function withTenantTransaction(client, { accountId, trainerId }, fn) {
+  if (!accountId || !trainerId) {
+    throw new Error("withTenantTransaction requires both accountId and trainerId");
+  }
+  await client.query("begin");
+  try {
+    await client.query("set local role rydeahorse_app");
+    await client.query("select set_config('app.account_id', $1, true)", [accountId]);
+    await client.query("select set_config('app.trainer_id', $1, true)", [trainerId]);
+    const result = await fn();
+    await client.query("commit");
+    return result;
+  } catch (err) {
+    await client.query("rollback");
+    throw err;
+  }
+}
+
+/**
  * Bind a repository to one tenant.
  * @param db        drizzle handle
  * @param tenant    { accountId, trainerId }

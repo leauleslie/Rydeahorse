@@ -12,7 +12,8 @@
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "test:guard": "node --test test/guard.test.js",
     "test:concurrency": "node --test test/concurrency.test.js",
-    "test:tenancy": "node --test test/tenancy.test.js"
+    "test:tenancy": "node --test test/tenancy.test.js",
+    "test:migrate": "node test/migrate-test-database.js"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.6",

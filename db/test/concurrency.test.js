@@ -90,6 +90,32 @@ async function waitUntilBlockedBy(obs, waiterPid, blockerPid, timeoutMs = 15000)
   return false;
 }
 
+/**
+ * Assert an in-flight insert completes WITHOUT waiting on the other transaction.
+ *
+ * The mirror of waitUntilBlockedBy, and needed for the same reason. A test that merely awaits
+ * both inserts and then commits would pass even if the second one blocked for the whole
+ * duration and only succeeded once the first committed — which is the very behaviour these
+ * "must not reject" tests exist to rule out. Racing against a deadline turns a silent stall
+ * into a fast, named failure instead of a hang.
+ */
+async function assertCompletesWithoutBlocking(attempt, what, timeoutMs = 8000) {
+  let timer;
+  const settled = await Promise.race([
+    attempt.then(() => true),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  assert.ok(
+    settled,
+    `${what} did not complete while the other transaction was still open — it is blocking, ` +
+      `and these two lessons are supposed to be independent`,
+  );
+  return attempt;
+}
+
 /** How many slot-holding rows exist for a horse on DATE. */
 async function heldRows(client, horseId) {
   const { rows } = await client.query(
@@ -184,13 +210,17 @@ describe("constraint #1 — horse_not_double_booked, under genuine concurrency",
       await tx1.query("begin");
       await tx2.query("begin");
       await insertBooking(tx1, { ...fixture, studentId: fixture.studentA }, "10:00", "11:00");
-      // Identical times, different animal. If this blocked or failed, the passing test above
-      // would be evidence of over-broad locking rather than of the rule.
-      await insertBooking(
-        tx2,
-        { ...fixture, studentId: fixture.studentB, horseId: fixture.otherHorseId },
-        "10:00",
-        "11:00",
+      // Identical times, different animal. This must go through while tx1 is STILL OPEN — if
+      // it merely succeeded after tx1 committed, the passing test above would be evidence of
+      // over-broad locking rather than of the rule.
+      await assertCompletesWithoutBlocking(
+        insertBooking(
+          tx2,
+          { ...fixture, studentId: fixture.studentB, horseId: fixture.otherHorseId },
+          "10:00",
+          "11:00",
+        ),
+        "a booking on a different horse",
       );
       await tx1.query("commit");
       await tx2.query("commit");
@@ -257,7 +287,11 @@ describe("what the constraint must NOT reject", () => {
       await insertBooking(tx1, { ...fixture, studentId: fixture.studentA }, "10:00", "11:00");
       // Touching the first lesson's end exactly. Half-open bounds are what make back-to-back
       // scheduling expressible at all; a closed upper bound would reject every adjacent pair.
-      await insertBooking(tx2, { ...fixture, studentId: fixture.studentB }, "11:00", "12:00");
+      // It must not even WAIT on the first lesson: adjacency is not contention.
+      await assertCompletesWithoutBlocking(
+        insertBooking(tx2, { ...fixture, studentId: fixture.studentB }, "11:00", "12:00"),
+        "an adjacent booking on the same horse",
+      );
       await tx1.query("commit");
       await tx2.query("commit");
       assert.equal(await heldRows(setup, fixture.horseId), 2, "both adjacent lessons should stand");

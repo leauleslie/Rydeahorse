@@ -278,7 +278,54 @@ such rather than presented as done.
 
 ---
 
-## 13. Smaller calls, listed for completeness
+## 13. Row-Level Security scopes `bookings` to the ACCOUNT, not the trainer
+
+Migration `0002` puts tenant isolation in the database rather than leaving it to the
+repository, on the same argument that made `horse_not_double_booked` a constraint: the
+repository can only be trusted while every read goes through it, and the first query that does
+not is silent. Most policies follow the tenant columns exactly — account-scoped tables match on
+`account_id`, trainer-scoped tables on `trainer_id`, and the four student-derived tables
+(`student_alerts`, `student_notes`, `student_riding_windows`, `student_no_ride_horses`) join
+back through `students`.
+
+**`bookings` is the exception, and it is deliberate.** The table carries `trainer_id`, so the
+obvious policy is `trainer_id = app_current_trainer()`. That policy is wrong here. Horse
+welfare — rest days, and the daily saddle-time caps — counts every lesson the animal did that
+day regardless of which coach booked it. Under a trainer-scoped policy the welfare rules would
+be structurally unable to see half their input in a two-coach barn, which is the exact failure
+that made coach-level tenancy untenable in the first place (a horse ridden 90 minutes by each
+is at 180 and no rule knows).
+
+RLS cannot distinguish "reading for the welfare check" from "reading for the coach's day
+view" — it sees one table and one caller. So the policy is scoped to the account, and the
+trainer narrowing for the day view stays in the repository, where it already was. What RLS
+adds is the guarantee the repository could never make: no query, scoped or not, reaches
+**another account's** lessons.
+
+The cost is stated plainly: a coach can read her barn-mate's lesson rows, including
+`student_id`. Within one account that is already true of the horses they share, and both
+coaches are on the same account by choice. Across accounts nothing is visible.
+
+**What would reopen this:** an account whose trainers are not mutually trusted — a facility
+renting stalls to independent coaches rather than employing them. That is a different tenancy
+model, and the fix is not a different policy but a `SECURITY DEFINER` function for the welfare
+reads, so the caps can see the whole barn while ordinary reads cannot.
+
+Two related calls recorded with it:
+
+- **The app runs as `rydeahorse_app`, not as the connection owner.** RLS does not apply to a
+  table's owner, and on Neon `neondb_owner` additionally carries `BYPASSRLS` — so every policy
+  is dead code for the role that runs migrations. Enforcement requires a role that is neither.
+  The role is `NOLOGIN`; callers `SET LOCAL ROLE` into it for the duration of a transaction.
+  A deployment preferring a real login role can add `LOGIN` without touching a policy.
+- **`auth_identities` and `auth_codes` are deliberately left out.** They legitimately span
+  tenants — one phone number holds profiles under several trainers, and "one code surfaces
+  every profile attached to a number" is the specified behaviour. Scoping them to a trainer
+  breaks that lookup; scoping them to an account misdescribes what they hold. They contain a
+  phone number and a verification state, no roster data. Authorisation for them belongs in the
+  auth flow, which is not built.
+
+## 14. Smaller calls, listed for completeness
 
 - **`Message_Log.timestamp` → `message_log.sent_at`.** `timestamp` collides with the type name
   in every statement that touches it.
