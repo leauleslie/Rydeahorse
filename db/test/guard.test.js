@@ -12,9 +12,15 @@ import { assertNotProduction, ProductionDatabaseRefusal } from "./guard.js";
 const envLocal = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".env.local");
 if (existsSync(envLocal)) process.loadEnvFile(envLocal);
 
-const PROD = "postgres://u:p@ep-tiny-breeze-a69luthu.us-west-2.aws.neon.tech/neondb";
-const POOLED = "postgres://u:p@ep-tiny-breeze-a69luthu-pooler.us-west-2.aws.neon.tech/neondb";
-const TEST = "postgres://u:p@ep-sparkling-scene-a62v379o.us-west-2.aws.neon.tech/neondb";
+// Fictional endpoints, deliberately. These only need to have the SHAPE of Neon hostnames —
+// an endpoint id, a `-pooler` sibling for the same id, and a second unrelated id — because
+// every assertion below is about how those shapes compare to each other. Using the real ones
+// would publish the hostname of a production database in a public repository to no benefit.
+// The genuine URLs are still exercised, at runtime and unpublished, by the
+// "against the real .env.local" block at the bottom of this file.
+const PROD = "postgres://u:p@ep-quiet-meadow-11111111.us-west-2.aws.neon.tech/neondb";
+const POOLED = "postgres://u:p@ep-quiet-meadow-11111111-pooler.us-west-2.aws.neon.tech/neondb";
+const TEST = "postgres://u:p@ep-still-water-22222222.us-west-2.aws.neon.tech/neondb";
 const env = { DATABASE_URL: POOLED, DIRECT_DATABASE_URL: PROD };
 
 const refuses = (fn, why) => assert.throws(fn, ProductionDatabaseRefusal, why);
