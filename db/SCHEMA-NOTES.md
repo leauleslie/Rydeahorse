@@ -325,7 +325,50 @@ Two related calls recorded with it:
   phone number and a verification state, no roster data. Authorisation for them belongs in the
   auth flow, which is not built.
 
-## 14. Smaller calls, listed for completeness
+## 14. RLS is closed by credential separation, not by FORCE
+
+`0002` enabled RLS and the policies bound only callers who deliberately switched into
+`rydeahorse_app`. A connection that simply queried as the connecting role saw everything — so
+the protection reached the code that already knew about it, and missed the developer who had
+never heard of `withTenantTransaction`. `0003` closes that.
+
+**The obvious fix does not work, and it is worth writing down why.** `ALTER TABLE … FORCE ROW
+LEVEL SECURITY` removes the *owner-by-ownership* exemption, and it is natural to read that as
+"now everyone is subject". It is not. `BYPASSRLS` is a separate role attribute that outranks
+FORCE entirely, Neon grants it to `neondb_owner`, and the owner cannot drop it:
+
+```
+owner sees students (RLS enabled, not forced): 9
+owner sees students (RLS FORCED):              9
+owner CANNOT drop BYPASSRLS: permission denied to alter role
+```
+
+Both facts are asserted in `db/test/fail-closed.test.js` so they cannot drift silently.
+
+So FORCE is applied — it is correct defense in depth, and it matters if the application role
+ever comes to own a table — but **the mechanism is credential separation**. `rydeahorse_app`
+owns nothing and has no `BYPASSRLS`, so a query on its connection is subject to policy whether
+or not its author knew RLS existed. Isolation cannot be enforced against a caller holding
+credentials permitted to bypass it; it is enforced by not issuing the application those
+credentials.
+
+The residual risk is stated rather than hidden: **anyone holding the owner credentials still
+bypasses everything**, permanently, and no in-database change can alter that on Neon. The
+owner connection string is a migration credential and must be treated as one.
+
+**What this costs.** Work that legitimately spans tenants — generating occurrences for every
+trainer, retention sweeps over alerts, reporting — returns *nothing* under the app role rather
+than everything. Those jobs must run on a deliberately separate owner connection, or iterate
+per tenant setting identity each time. Migrations and seed scripts keep running as the owner;
+the seed writes two accounts across one connection, which is a cross-tenant write and only
+works because of the bypass. That requirement used to be incidental and is now pinned by a
+test.
+
+**What would reopen this:** Neon granting superuser, or ceasing to grant `BYPASSRLS` to
+`neondb_owner` — at which point the owner exemption could be closed in-database and FORCE
+would become the mechanism rather than a supporting measure.
+
+## 15. Smaller calls, listed for completeness
 
 - **`Message_Log.timestamp` → `message_log.sent_at`.** `timestamp` collides with the type name
   in every statement that touches it.

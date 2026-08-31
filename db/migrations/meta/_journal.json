@@ -22,6 +22,13 @@
       "when": 1787676845815,
       "tag": "0002_row_level_security",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787676845816,
+      "tag": "0003_force_rls_and_app_login",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,7 @@ migrations/
   0000_initial_schema.sql      Generated. 26 tables, 16 enums, constraints #2 and #3.
   0001_exclusion_constraints.sql   Hand-written. btree_gist, timerange, constraints #1 and #4.
   0002_row_level_security.sql      Hand-written. The app role, 24 tables under RLS, 24 policies.
+  0003_force_rls_and_app_login.sql Hand-written. FORCE on all 24; the app role gains LOGIN.
 repo/
   index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once.
 test/
@@ -38,6 +39,8 @@ test/
   concurrency.test.js          Constraint #1 proved against a real race.
   tenancy.test.js              Isolation harness over the registry in tenant-queries.js.
   rls.test.js                  The same isolation, proved against raw queries that bypass repo/.
+  fail-closed.test.js          A raw query as the app role, outside a tenant transaction, sees nothing.
+  pooler.test.js               The isolation battery run through Neon's PgBouncer endpoint.
 ```
 
 ```bash
