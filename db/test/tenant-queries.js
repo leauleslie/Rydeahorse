@@ -59,6 +59,13 @@ export const TENANT_READS = [
   q("priceBands.list", "trainer", "priceBands", (r) => r.priceBands.list()),
   q("priceBands.windows", "trainer", "priceBandWindows", (r) => r.priceBands.windows()),
   q("availability.list", "trainer", "availability", (r) => r.availability.list()),
+  q("timeOff.list", "trainer", "timeOff", (r) => r.timeOff.list()),
+  q("lessonTypes.bandAdjustments", "trainer", "bandAdjustments", (r) => r.lessonTypes.bandAdjustments(), {
+    id: (row) => `${row.lessonTypeId}:${row.bandId}`,
+  }),
+  q("lessonTypes.restrictedHorses", "trainer", "restrictedHorses", (r) => r.lessonTypes.restrictedHorses(), {
+    id: (row) => `${row.lessonTypeId}:${row.horseId}`,
+  }),
   q("recurring.list", "trainer", "recurring", (r) => r.recurring.list()),
   q("offers.listOn", "trainer", "offers", (r) => r.offers.listOn(SHARED_DATE)),
   // Same table and same date as bookings.listForHorsesOn above, opposite rule: the coach's

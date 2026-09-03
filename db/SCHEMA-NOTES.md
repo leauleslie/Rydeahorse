@@ -368,7 +368,53 @@ test.
 `neondb_owner` — at which point the owner exemption could be closed in-database and FORCE
 would become the mechanism rather than a supporting measure.
 
-## 15. Smaller calls, listed for completeness
+## 15. Horse welfare caps under-count on a horse shared between two trainers
+
+Found by `db/test/engine-inputs.test.js`, the first thing to feed real rows into the engine.
+
+`horseMinutesOnDate` resolves each booking's saddle time by looking its lesson type up in the
+array it was handed:
+
+```js
+const lt = lessonTypes.find((l) => l.id === b.lessonTypeId);
+return sum + (lt ? lt.rideTimeMin : 0);
+```
+
+Bookings must be loaded ACCOUNT-wide — the welfare rules count every lesson the animal did,
+whoever booked it, and that is why the RLS policy on `bookings` is account-scoped. But lesson
+types are TRAINER-scoped, by design and by policy: one coach genuinely cannot read another's.
+So a barn-mate's lesson has a `lesson_type_id` that is not in the array, `lt` is undefined, and
+the lesson contributes **zero** minutes. The `? :` that keeps it from throwing is exactly what
+makes it silent.
+
+Measured on the test fixture: a horse ridden 45 minutes by each of two coaches in one barn
+reports **45**, not 90. The same hole hits the adult cap twice over, because that one also
+resolves the rider through `students` to test `age >= 18`, and students are trainer-scoped for
+the same reason.
+
+This is not a mapping bug and not an RLS bug. It is a hole in the schema: the welfare rules
+promise to count every lesson the animal did, and the numbers they need are not reachable from
+the data one trainer is permitted to see. It is the same shape as the failure that made
+account-level tenancy necessary in the first place — a horse ridden 90 minutes by each coach is
+at 180 and no rule knows — except this time the rule cannot know even though the bookings are
+right there.
+
+**The fix is not to widen the lesson-type or student scope.** That trades a welfare bug for a
+tenancy breach, and the isolation harness would rightly fail it. The fix is to stamp the facts
+onto the booking row at creation: `ride_time_min`, and whether the rider was an adult. That is
+the argument already accepted for the stored price receipt — a booking's saddle time is a
+historical fact about that lesson, and recomputing it from a table the reader may not be allowed
+to see is precisely what makes it wrong.
+
+That would be a **third exception to derive-don't-store**, which CLAUDE.md says needs the same
+standard of argument as the first two. It is not taken here; it needs recording in Section 9
+first. Until then the caps are permissive on shared horses, and two tests assert the wrong
+numbers at their current values so that closing the gap makes them fail loudly.
+
+**What would reopen this:** the first account with two trainers sharing a horse — at which point
+the caps are wrong in production, not just in a fixture.
+
+## 16. Smaller calls, listed for completeness
 
 - **`Message_Log.timestamp` → `message_log.sent_at`.** `timestamp` collides with the type name
   in every statement that touches it.

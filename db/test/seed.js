@@ -54,11 +54,16 @@ async function seedTrainer(client, { accountId, horses, label, index }) {
   // Jamie is 15, so guardian name and phone are not optional — `students_minor_has_guardian`
   // enforces Section 8's rule. A minor stays in the fixture deliberately: the roster this
   // harness protects is the one where a leak is most sensitive.
+  // riding_styles and weight are set deliberately. They default to '{}' and NULL, and with an
+  // empty style list the engine's pairing check can never pass — `horse.styles.some(s =>
+  // student.ridingStyles.includes(s))` is false for every horse. A fixture that leaves them at
+  // their defaults makes every engine test fail for a reason that has nothing to do with what
+  // it is testing.
   const students = [];
-  for (const [name, age, level] of [
-    ["Alex Morgan", 34, "intermediate"],
-    ["Jamie Lee", 15, "beginner"],
-    ["Robin Fox", 41, "advanced"],
+  for (const [name, age, level, weight] of [
+    ["Alex Morgan", 34, "intermediate", 140],
+    ["Jamie Lee", 15, "beginner", 90],
+    ["Robin Fox", 41, "advanced", 165],
   ]) {
     const minor = age < 18;
     students.push(
@@ -66,10 +71,10 @@ async function seedTrainer(client, { accountId, horses, label, index }) {
         client,
         `insert into students (trainer_id, name, emergency_contact_name,
                                emergency_contact_phone, age, experience_level,
-                               guardian_name, guardian_phone)
-         values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+                               guardian_name, guardian_phone, riding_styles, weight)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, '{English}', $9) returning id`,
         [trainerId, name, "Pat Kin", "555-0100", age, level,
-         minor ? "Dana Lee" : null, minor ? "555-0111" : null],
+         minor ? "Dana Lee" : null, minor ? "555-0111" : null, weight],
       ),
     );
   }
@@ -194,6 +199,33 @@ async function seedTrainer(client, { accountId, horses, label, index }) {
     ),
   ];
 
+  // Deliberately far from SHARED_DATE: time off that overlapped the fixture's lesson dates
+  // would fail the availability check in every engine test built on this seed.
+  const timeOff = [
+    await one(
+      client,
+      `insert into trainer_time_off (trainer_id, start_date, end_date, reason)
+       values ($1, '2026-12-24', '2026-12-26', 'Holiday') returning id`,
+      [trainerId],
+    ),
+  ];
+
+  // The two junctions the engine expects as inline fields. Both exist in the fixture so the
+  // mapping is exercised with real rows rather than with the empty case, which is the one that
+  // accidentally passes.
+  await client.query(
+    `insert into lesson_type_band_adjustments (lesson_type_id, band_id, trainer_id, amount)
+     values ($1, $2, $3, 10)`,
+    [lessonTypes[1], priceBands[0], trainerId],
+  );
+  const bandAdjustments = [`${lessonTypes[1]}:${priceBands[0]}`];
+
+  await client.query(
+    `insert into lesson_type_restricted_horses (lesson_type_id, horse_id) values ($1, $2)`,
+    [lessonTypes[0], horses[0]],
+  );
+  const restrictedHorses = [`${lessonTypes[0]}:${horses[0]}`];
+
   // Composite primary key (student_id, horse_id) — no surrogate id — so the harness compares
   // the pair, kept as a string so every entity set is a set of comparable scalars.
   await client.query(
@@ -218,6 +250,9 @@ async function seedTrainer(client, { accountId, horses, label, index }) {
     ridingWindows,
     offers,
     noRideHorses,
+    timeOff,
+    bandAdjustments,
+    restrictedHorses,
   };
 }
 

@@ -35,7 +35,21 @@ import {
   studentRidingWindows,
   studentNoRideHorses,
   offers,
+  trainerTimeOff,
+  lessonTypeBandAdjustments,
+  lessonTypeRestrictedHorses,
 } from "../schema/index.js";
+import {
+  toEngineHorse,
+  toEngineStudent,
+  toEngineLessonType,
+  toEngineBooking,
+  toEngineAvailability,
+  toEngineTimeOff,
+  toEnginePriceBands,
+  toEngineTrainerConfig,
+} from "./to-engine.js";
+import { trainers } from "../schema/index.js";
 
 /**
  * Open a tenant-scoped transaction and run `fn` inside it.
@@ -109,6 +123,11 @@ export function forTenant(db, { accountId, trainerId }) {
     .from(horses)
     .where(eq(horses.accountId, accountId));
 
+  const ownLessonTypeIds = db
+    .select({ id: lessonTypes.id })
+    .from(lessonTypes)
+    .where(eq(lessonTypes.trainerId, trainerId));
+
   return {
     tenant: { accountId, trainerId },
 
@@ -137,6 +156,18 @@ export function forTenant(db, { accountId, trainerId }) {
 
     lessonTypes: {
       list: () => db.select().from(lessonTypes).where(eq(lessonTypes.trainerId, trainerId)),
+      // The two junctions the engine needs as inline fields on a lesson type.
+      bandAdjustments: () =>
+        db
+          .select()
+          .from(lessonTypeBandAdjustments)
+          .where(eq(lessonTypeBandAdjustments.trainerId, trainerId)),
+      // No trainer_id of its own; scoped through the lesson type that owns it.
+      restrictedHorses: () =>
+        db
+          .select()
+          .from(lessonTypeRestrictedHorses)
+          .where(inArray(lessonTypeRestrictedHorses.lessonTypeId, ownLessonTypeIds)),
     },
 
     priceBands: {
@@ -154,6 +185,10 @@ export function forTenant(db, { accountId, trainerId }) {
           .select()
           .from(trainerAvailability)
           .where(eq(trainerAvailability.trainerId, trainerId)),
+    },
+
+    timeOff: {
+      list: () => db.select().from(trainerTimeOff).where(eq(trainerTimeOff.trainerId, trainerId)),
     },
 
     bookings: {
@@ -191,6 +226,87 @@ export function forTenant(db, { accountId, trainerId }) {
           .select()
           .from(offers)
           .where(and(eq(offers.trainerId, trainerId), eq(offers.date, date))),
+    },
+
+    /**
+     * Everything `validateBooking` and `priceFor` need for one date, in the engine's own
+     * shapes. This is the seam: above it, screens speak the engine's vocabulary and never see
+     * a column name; below it, nothing knows what a rule is.
+     *
+     * Returns the engine's argument bag minus the three choices a screen is making — the
+     * student, the horse and the lesson type — which callers spread in:
+     *
+     *   const ctx = await repo.engineInputsFor(date);
+     *   validateBooking({ ...ctx, student, horse, lessonType, date, start });
+     *
+     * `bookings` is loaded ACCOUNT-wide rather than for this trainer, deliberately. The rest-day
+     * and saddle-time checks count every lesson the animal did regardless of who booked it, and
+     * handing the engine only this coach's bookings would let a shared horse pass a welfare
+     * check it should fail. This is the same reason the RLS policy on `bookings` is
+     * account-scoped.
+     */
+    engineInputsFor: async (date) => {
+      const [
+        horseRows, studentRows, lessonTypeRows, bookingRows,
+        availabilityRows, timeOffRows, bandRows, windowRows,
+        noRideRows, adjustmentRows, restrictedRows, trainerRows,
+      ] = await Promise.all([
+        db.select().from(horses).where(eq(horses.accountId, accountId)),
+        db.select().from(students).where(eq(students.trainerId, trainerId)),
+        db.select().from(lessonTypes).where(eq(lessonTypes.trainerId, trainerId)),
+        // Account-wide — see above.
+        db.select().from(bookings).where(inArray(bookings.horseId, ownHorseIds)),
+        db.select().from(trainerAvailability).where(eq(trainerAvailability.trainerId, trainerId)),
+        db.select().from(trainerTimeOff).where(eq(trainerTimeOff.trainerId, trainerId)),
+        db.select().from(priceBands).where(eq(priceBands.trainerId, trainerId)),
+        db.select().from(priceBandWindows).where(eq(priceBandWindows.trainerId, trainerId)),
+        db.select().from(studentNoRideHorses).where(inArray(studentNoRideHorses.studentId, ownStudentIds)),
+        db.select().from(lessonTypeBandAdjustments).where(eq(lessonTypeBandAdjustments.trainerId, trainerId)),
+        db.select().from(lessonTypeRestrictedHorses).where(inArray(lessonTypeRestrictedHorses.lessonTypeId, ownLessonTypeIds)),
+        db.select().from(trainers).where(eq(trainers.id, trainerId)),
+      ]);
+
+      // Group the junctions once, rather than filtering inside each map — a lesson type with
+      // no adjustments must still come back with `{}` and not `undefined`, because the engine
+      // indexes into it.
+      const noRideByStudent = new Map();
+      for (const r of noRideRows) {
+        if (!noRideByStudent.has(r.studentId)) noRideByStudent.set(r.studentId, []);
+        noRideByStudent.get(r.studentId).push(r.horseId);
+      }
+      const adjustmentsByType = new Map();
+      for (const r of adjustmentRows) {
+        if (!adjustmentsByType.has(r.lessonTypeId)) adjustmentsByType.set(r.lessonTypeId, {});
+        adjustmentsByType.get(r.lessonTypeId)[r.bandId] = r.amount;
+      }
+      const restrictedByType = new Map();
+      for (const r of restrictedRows) {
+        if (!restrictedByType.has(r.lessonTypeId)) restrictedByType.set(r.lessonTypeId, []);
+        restrictedByType.get(r.lessonTypeId).push(r.horseId);
+      }
+
+      if (!trainerRows.length) {
+        // Only reachable if the tenant id is wrong or RLS hid the row — either way the engine
+        // would otherwise fail deep inside pricing on a null config.
+        throw new Error(`no trainer row visible for ${trainerId}; cannot build engine inputs`);
+      }
+
+      return {
+        date,
+        horses: horseRows.map(toEngineHorse),
+        students: studentRows.map((r) =>
+          toEngineStudent(r, { noRideHorseIds: noRideByStudent.get(r.id) ?? [] })),
+        lessonTypes: lessonTypeRows.map((r) =>
+          toEngineLessonType(r, {
+            bandAdjustments: adjustmentsByType.get(r.id) ?? {},
+            restrictedHorseIds: restrictedByType.get(r.id) ?? [],
+          })),
+        bookings: bookingRows.map(toEngineBooking),
+        availability: toEngineAvailability(availabilityRows),
+        timeOffBlocks: toEngineTimeOff(timeOffRows),
+        priceBands: toEnginePriceBands(bandRows, windowRows),
+        trainerConfig: toEngineTrainerConfig(trainerRows[0]),
+      };
     },
 
     // ---- the four that carry no tenant column of their own ----

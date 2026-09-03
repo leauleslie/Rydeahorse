@@ -94,6 +94,10 @@ describe("every registered repository read obeys its scoping rule", () => {
     const exposed = [];
     for (const [group, members] of Object.entries(ctx.a1.repo)) {
       if (group === "tenant") continue;
+      // `engineInputsFor` is a top-level function, not a group of reads. It composes the reads
+      // below it and returns engine-shaped objects rather than rows, so the row-identity checks
+      // this harness performs do not apply to it — db/test/engine-inputs.test.js covers it.
+      if (typeof members === "function") continue;
       for (const [name, fn] of Object.entries(members)) {
         if (typeof fn === "function") exposed.push(`${group}.${name}`);
       }

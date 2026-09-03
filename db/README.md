@@ -32,13 +32,17 @@ migrations/
   0002_row_level_security.sql      Hand-written. The app role, 24 tables under RLS, 24 policies.
   0003_force_rls_and_app_login.sql Hand-written. FORCE on all 24; the app role gains LOGIN.
 repo/
-  index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once.
+  index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once,
+                               plus engineInputsFor(date), the seam screens call.
+  to-engine.js                 Row shapes -> engine shapes. The one translation layer.
 test/
   guard.js / db.js             The two-layer refusal to run against production.
   seed.js                      Three trainers across two accounts; a1 and a2 share horses.
   concurrency.test.js          Constraint #1 proved against a real race.
   tenancy.test.js              Isolation harness over the registry in tenant-queries.js.
   rls.test.js                  The same isolation, proved against raw queries that bypass repo/.
+  to-engine.test.js            The mapping, unit-tested without a database.
+  engine-inputs.test.js        Real rows through the mapping into validateBooking and priceFor.
   fail-closed.test.js          A raw query as the app role, outside a tenant transaction, sees nothing.
   pooler.test.js               The isolation battery run through Neon's PgBouncer endpoint.
 ```
