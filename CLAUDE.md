@@ -46,7 +46,8 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
   repo/to-engine.js      Row shapes -> engine shapes. The one translation layer.
   repo/writes.js         The mutations, reached as repo.write.*. Each one asserts it is inside
                          withTenantTransaction before touching anything.
-  test/                  node --test against a real Postgres branch. 116 tests.
+  test/                  node --test against a real Postgres branch. Reads, writes, isolation,
+                         RLS and the engine mapping — see db/test/README.md.
 ```
 
 `npm test` from `engine/`. No install step — the suite is `node --test test/*.test.js`.
