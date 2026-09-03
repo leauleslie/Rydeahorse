@@ -16,6 +16,9 @@ why.
 product-foundations.md   The spec. Section 8 (sheet schema) and Section 10 (rules engine)
                          are the authoritative ones; Section 3 is a superseded v1 sketch
                          kept for provenance. Section 9 is the decisions log.
+schema.md                The data layer's decision record: what changed when the data moved
+                         off Google Sheets to Postgres, and why each table looks as it does.
+                         `db/SCHEMA-NOTES.md` holds the judgment calls made while building it.
 prototype.jsx            The clickable Phase 1a prototype — one React file, ~4,800 lines,
                          every coach and student screen. Carries its own pre-extraction
                          copy of the rules; see "Two copies of the rules" below.
@@ -30,15 +33,37 @@ engine/                  The rules and pricing engine. Pure JS, no dependencies.
   pricing.js             Bands, frequency tiers, the ratchet, priceFor.
   rules.js               Availability, pairing, usage caps, rest days, validateBooking.
   test/                  node --test. 41 tests, no framework, no dependencies.
+db/                      Postgres schema, migrations, and the repository. Drizzle for schema
+                         and migration generation; no ORM behaviour beyond query building.
+  schema/                Tables as Drizzle declarations. No queries, no tenant ids — nothing
+                         in here can leak, because nothing in here fetches.
+  migrations/            0000 generated, 0001+ hand-written. drizzle-kit cannot express an
+                         EXCLUDE constraint, a range type, a role or a policy, so it will
+                         neither re-emit nor diff 0001-0003. Change one, write a new one.
+  repo/index.js          forTenant(db, {accountId, trainerId}) — the one place a row can be
+                         fetched for the wrong coach. Plus withTenantTransaction, the only
+                         shape under which the RLS policies apply, and engineInputsFor(date).
+  repo/to-engine.js      Row shapes -> engine shapes. The one translation layer.
+  test/                  node --test against a real Postgres branch. 116 tests.
 ```
 
 `npm test` from `engine/`. No install step — the suite is `node --test test/*.test.js`.
 
+`npm test` from `db/` runs the database suites. They need `TEST_DATABASE_URL` pointing at a
+branch that is not production and a one-time `npm run test:mark`; the setup refuses to run
+otherwise, and refuses before opening a socket. `db/test/README.md` explains both layers of
+that refusal and how to add a query to the tenant-isolation harness in one line.
+
 The prototype is the working reference for Phase 1a and the doc is kept in sync with it
 deliberately (Section 14 lists the known gaps between them). It is a browser artifact, not the
 product: the simulated clock, the Coach/Student role switch, the returning-student shortcut and
-the seeded history are prototype-only. The real web app, the Apps Script backend and the Google
-Sheets data layer are specified in Sections 6, 8, 11 and 13 and are not built yet.
+the seeded history are prototype-only.
+
+The data layer is no longer Google Sheets and no longer unbuilt: it is Postgres, and `schema.md`
+is the decision record for that move. Section 8 remains the source of truth for what each table
+*means* — every table in `db/schema/` is a translation of it — but where Section 8 describes a
+spreadsheet and `schema.md` describes a database, the database wins. The real web app and the
+backend that serves it are still specified in Sections 6, 11 and 13 and still do not exist.
 
 ## Two copies of the rules
 
@@ -79,10 +104,12 @@ priceFor({ student, lessonType, date, start, offerDiscount, manualAdjustment,
        price, raw, band, tier, flooredBy, cappedBy }
 ```
 
-`validateBooking` runs all seven checks every time and reports them in specification order. It
+`validateBooking` runs all eight checks every time and reports them in specification order —
+`trainer_available`, `horse_active`, `rest_day`, `usage_cap`, `pairing`, `horse_free`,
+`trainer_free`, `price_in_range`. It
 does **not** short-circuit — the order decides which reason gets reported, and a validation
-checklist has to show the whole picture at once. `firstFailure()` takes the reported reason off
-the front.
+checklist has to show the whole picture at once. `firstFailure(validation)` takes the reported
+reason off the front — it takes the whole result, not its `checks` array.
 
 `priceFor` never returns a bare number. Every screen that shows a price must be able to show
 the reasoning behind it, so the components always come back with the total.
@@ -106,9 +133,22 @@ reasoning — read it before reintroducing any ambient time.
 
 **The tenant boundary is not in the engine.** It takes the horses, students, bookings and
 config it is given and never asks where they came from — so it cannot leak across tenants,
-because it cannot query. Scoping is one `trainer_id` filter at the repository. The moment the
-engine takes a `trainerId` and fetches something, every rule in it becomes untestable without a
-database.
+because it cannot query. The moment the engine takes a `trainerId` and fetches something, every
+rule in it becomes untestable without a database.
+
+Scoping happens at the repository, and there are **two rules, not one**. Trainer-scoped tables
+(students, bookings, alerts, notes, riding windows) must never cross trainers, *including two
+trainers inside one account* — a rider taking lessons from two coaches is two rows. Account-scoped
+tables (horses, and reads judged about a horse) must return **identical** rows to two trainers in
+one account, because a horse is one physical animal and both coaches ride it. A check that only
+knows how to assert disjointness reports the second rule working as designed as a leak.
+
+Below the repository, Postgres enforces the same boundary with row-level security, for the same
+reason `horse_not_double_booked` is a constraint: the repository can only be trusted while every
+read goes through it, and the first query that does not is silent. The application connects as
+`rydeahorse_app`, which owns nothing and has no `BYPASSRLS`, so a forgotten
+`withTenantTransaction` returns **zero rows rather than every tenant's**. The owner credential
+bypasses all of it and always will — that is a migration credential, never an application one.
 
 **Derive, don't store.** Usage caps, rest-day counts, ride tallies, lesson end times, completion
 status, offer conversion — all computed on read from `Bookings`. A stored counter drifts; a
@@ -122,7 +162,11 @@ reasoning rather than bending it:
   precisely what current state can't recover — a cancelled booking looks identical whichever
   side cancelled it.
 
-Adding a third exception needs the same standard of argument.
+Adding a third exception needs the same standard of argument. **One is currently pending that
+argument** and is not taken: `bookings` would need `ride_time_min` and the rider's adult-ness
+stamped on it, because horse welfare counts every lesson the animal did while lesson types and
+students are trainer-scoped — so a barn-mate's lesson is unresolvable and silently contributes
+zero. See `db/SCHEMA-NOTES.md` §15 and the gap listed at the end of this file.
 
 **Pricing is three separate mechanisms, not one adjustable number.** A **band premium** attaches
 to the slot (uniform, published in advance), a **frequency discount** attaches to the student (a
@@ -197,9 +241,17 @@ and expiry is a read filter, not a delete, so nothing breaks if a cleanup job ha
 - Test names read as specification sentences and state the *why*, not just the what — e.g.
   "rest window counts distinct DATES, not bookings", "the floor is announced, not applied
   quietly". Match that style; the suite doubles as documentation.
-- The engine uses camelCase (`rideTimeMin`, `lateCancelHours`); the Sheets schema in Section 8
-  is snake_case (`ride_time_min`, `late_cancel_hours`). The mapping belongs at the data layer,
-  not inside the engine.
+- Database suites use a seeded fixture rather than hand-built objects, because what they pin
+  down is a query's scope rather than a rule. The two tenants in `db/test/seed.js` deliberately
+  collide on every value except their ids — same horse names, same lesson dates — so that only
+  tenant scoping can separate them and an unscoped query cannot pass by accident.
+- The engine uses camelCase (`rideTimeMin`, `lateCancelHours`); the schema is snake_case
+  (`ride_time_min`, `late_cancel_hours`). The mapping lives in `db/repo/to-engine.js` and
+  nowhere else — never inside the engine, whose input shape is the contract the prototype
+  already speaks. It is more than renaming: `date` arrives as a string where the engine calls
+  `.getDay()`, `day_of_week` is `'tue'` where the engine wants `2`, and `noRideHorses`,
+  `restrictedHorseIds` and `bandAdjustments` are junction tables there and inline
+  arrays/objects here. **Do not "simplify" it by renaming engine fields to match columns.**
 - Comments in the engine explain *why a rule is the way it is*, especially where the obvious
   implementation would be wrong. Keep that density — it's the file's main defense against a
   future reader "simplifying" a deliberate choice.
@@ -227,6 +279,25 @@ overturned it, rather than only in code.
 - **Frequency tiers ship switched off** — the thresholds start blank, which renders the whole
   mechanism invisible. They're computed from completed calendar months, and on day one there
   aren't any. Reopens after the pilot's first full month.
+- **Horse welfare caps under-count on a horse shared between two trainers.**
+  `horseMinutesOnDate` resolves a booking's saddle time by looking its lesson type up in the
+  array it was handed. Bookings are loaded account-wide, as the welfare rules require; lesson
+  types are trainer-scoped, as tenancy requires. A barn-mate's lesson is therefore unresolvable
+  and contributes **zero** — a horse ridden 45 minutes by each of two coaches reports 45, not
+  90 — and the `? :` that keeps it from throwing is what makes it silent. The adult cap has the
+  same hole twice over, resolving riders through trainer-scoped `students`. The fix is not to
+  widen scope, which trades a welfare bug for a tenancy breach; it is the pending third
+  exception to derive-don't-store above. Two tests in `db/test/engine-inputs.test.js` assert the
+  wrong numbers at their current values, so closing the gap fails them loudly. Bites for real on
+  the first account with two trainers sharing a horse.
+- **The repository is read-only.** Twenty-one reads, no writes. Every screen that books, cancels,
+  adds a rider or edits availability needs write functions, and they must run inside
+  `withTenantTransaction` or RLS rejects them.
+- **There is no pool and no request-scoped connection.** `withTenantTransaction` takes a single
+  client. A web app needs to check one out per request, set identity, run the handler, release.
+- **Coach authentication has no mechanism.** `trainers.email` is the identifier it will key on
+  and nothing more (`db/SCHEMA-NOTES.md` §5). Screens need a stubbed trainer id until it exists,
+  and it is what decides the shape of the request layer.
 - **Not yet extracted from the prototype**, and the natural next module *on top of* the engine:
   slot finding and matching — `findOpenSlots`, `findIntroOptions`, `findRecurringOptions`,
   `eligibleStudentsForSlot`, `offerRespectsPreferences`. They're pure and rules-dependent, but
