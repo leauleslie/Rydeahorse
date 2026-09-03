@@ -35,6 +35,7 @@ repo/
   index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once,
                                plus engineInputsFor(date), the seam screens call.
   to-engine.js                 Row shapes -> engine shapes. The one translation layer.
+  writes.js                    The mutations. repo.write.*, always inside a tenant transaction.
 test/
   guard.js / db.js             The two-layer refusal to run against production.
   seed.js                      Three trainers across two accounts; a1 and a2 share horses.
@@ -43,6 +44,8 @@ test/
   rls.test.js                  The same isolation, proved against raw queries that bypass repo/.
   to-engine.test.js            The mapping, unit-tested without a database.
   engine-inputs.test.js        Real rows through the mapping into validateBooking and priceFor.
+  writes.test.js               Creating, cancelling and settling — including both halves of the
+                               double-booking race, through the write path.
   fail-closed.test.js          A raw query as the app role, outside a tenant transaction, sees nothing.
   pooler.test.js               The isolation battery run through Neon's PgBouncer endpoint.
 ```

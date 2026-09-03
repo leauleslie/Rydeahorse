@@ -44,6 +44,8 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
                          fetched for the wrong coach. Plus withTenantTransaction, the only
                          shape under which the RLS policies apply, and engineInputsFor(date).
   repo/to-engine.js      Row shapes -> engine shapes. The one translation layer.
+  repo/writes.js         The mutations, reached as repo.write.*. Each one asserts it is inside
+                         withTenantTransaction before touching anything.
   test/                  node --test against a real Postgres branch. 116 tests.
 ```
 
@@ -290,9 +292,10 @@ overturned it, rather than only in code.
   exception to derive-don't-store above. Two tests in `db/test/engine-inputs.test.js` assert the
   wrong numbers at their current values, so closing the gap fails them loudly. Bites for real on
   the first account with two trainers sharing a horse.
-- **The repository is read-only.** Twenty-one reads, no writes. Every screen that books, cancels,
-  adds a rider or edits availability needs write functions, and they must run inside
-  `withTenantTransaction` or RLS rejects them.
+- **The write surface is partial.** `repo.write` covers booking creation, cancellation,
+  settlement, students and availability. Still missing: horses, lesson types, price bands,
+  recurring patterns, offers and substitutions. Undo is unimplemented — writes return the rows
+  they wrote, which is what a one-step undo would need, but nothing stores them.
 - **There is no pool and no request-scoped connection.** `withTenantTransaction` takes a single
   client. A web app needs to check one out per request, set identity, run the handler, release.
 - **Coach authentication has no mechanism.** `trainers.email` is the identifier it will key on

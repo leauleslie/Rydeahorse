@@ -50,6 +50,7 @@ import {
   toEngineTrainerConfig,
 } from "./to-engine.js";
 import { trainers } from "../schema/index.js";
+import { writesFor } from "./writes.js";
 
 /**
  * Open a tenant-scoped transaction and run `fn` inside it.
@@ -106,7 +107,15 @@ export async function withTenantTransaction(client, { accountId, trainerId }, fn
  * @param db        drizzle handle
  * @param tenant    { accountId, trainerId }
  */
-export function forTenant(db, { accountId, trainerId }) {
+/**
+ * Bind a repository to one tenant.
+ *
+ * `client` is optional and only writes need it — they take an advisory lock and check that they
+ * are inside a tenant transaction, neither of which drizzle exposes. Reads work without it, so
+ * the many read-only call sites are unchanged. Ask for `repo.write` without a client and you
+ * get a message saying so rather than a TypeError three frames down.
+ */
+export function forTenant(db, { accountId, trainerId, client = null }) {
   if (!accountId || !trainerId) {
     throw new Error("forTenant requires both accountId and trainerId");
   }
@@ -128,7 +137,7 @@ export function forTenant(db, { accountId, trainerId }) {
     .from(lessonTypes)
     .where(eq(lessonTypes.trainerId, trainerId));
 
-  return {
+  const repo = {
     tenant: { accountId, trainerId },
 
     horses: {
@@ -331,4 +340,27 @@ export function forTenant(db, { accountId, trainerId }) {
           .where(inArray(studentNoRideHorses.studentId, ownStudentIds)),
     },
   };
+
+  // Mutations live under their own namespace so that every call site says, in the expression
+  // itself, that it is changing something — `repo.write.bookings.create(...)`. It also keeps the
+  // isolation harness honest: that harness enumerates reads and asserts row scoping, which is
+  // not a question that means anything about an INSERT.
+  Object.defineProperty(repo, "write", {
+    enumerable: false,
+    get() {
+      if (!client) {
+        throw new Error(
+          "repo.write needs a client: forTenant(db, { accountId, trainerId, client }).\n" +
+            "Writes take an advisory lock and verify they are inside withTenantTransaction, " +
+            "and neither is reachable through drizzle alone.",
+        );
+      }
+      return writesFor({
+        db, client, accountId, trainerId,
+        engineInputsFor: repo.engineInputsFor,
+      });
+    },
+  });
+
+  return repo;
 }
