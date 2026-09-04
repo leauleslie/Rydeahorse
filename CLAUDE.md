@@ -46,6 +46,8 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
   repo/to-engine.js      Row shapes -> engine shapes. The one translation layer.
   repo/writes.js         The mutations, reached as repo.write.*. Each one asserts it is inside
                          withTenantTransaction before touching anything.
+  request.js             The request boundary: one connection, one tenant, one transaction,
+                         released whatever happens. Takes a provider, so the host is not fixed.
   test/                  node --test against a real Postgres branch. Reads, writes, isolation,
                          RLS and the engine mapping — see db/test/README.md.
 ```
@@ -297,8 +299,12 @@ overturned it, rather than only in code.
   settlement, students and availability. Still missing: horses, lesson types, price bands,
   recurring patterns, offers and substitutions. Undo is unimplemented — writes return the rows
   they wrote, which is what a one-step undo would need, but nothing stores them.
-- **There is no pool and no request-scoped connection.** `withTenantTransaction` takes a single
-  client. A web app needs to check one out per request, set identity, run the handler, release.
+- **The runtime is a pool, and the choice of host is deliberately still open.** `db/request.js`
+  takes a connection PROVIDER rather than assuming one, so a long-lived server (`poolProvider`)
+  and a per-invocation connection (`clientProvider`) are the same code path. Measured against
+  this project's own database: a warm query is ~33ms and opening a new connection is ~220ms
+  even warm, which is why the default is a real pool. An idle pool does NOT keep a suspended
+  Neon compute awake — that needs a keepalive or the always-on setting.
 - **Coach authentication has no mechanism.** `trainers.email` is the identifier it will key on
   and nothing more (`db/SCHEMA-NOTES.md` §5). Screens need a stubbed trainer id until it exists,
   and it is what decides the shape of the request layer.

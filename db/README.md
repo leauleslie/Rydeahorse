@@ -31,6 +31,8 @@ migrations/
   0001_exclusion_constraints.sql   Hand-written. btree_gist, timerange, constraints #1 and #4.
   0002_row_level_security.sql      Hand-written. The app role, 24 tables under RLS, 24 policies.
   0003_force_rls_and_app_login.sql Hand-written. FORCE on all 24; the app role gains LOGIN.
+request.js                     The request boundary. withRequest(provider, tenant, fn) — the
+                               only shape a handler should use. createRuntime() bundles a pool.
 repo/
   index.js                     forTenant(db, {accountId, trainerId}) — every read, scoped once,
                                plus engineInputsFor(date), the seam screens call.
@@ -46,6 +48,8 @@ test/
   engine-inputs.test.js        Real rows through the mapping into validateBooking and priceFor.
   writes.test.js               Creating, cancelling and settling — including both halves of the
                                double-booking race, through the write path.
+  request.test.js              Connection release on every path, reuse, and that no identity
+                               crosses between requests on a shared pooled connection.
   fail-closed.test.js          A raw query as the app role, outside a tenant transaction, sees nothing.
   pooler.test.js               The isolation battery run through Neon's PgBouncer endpoint.
 ```
