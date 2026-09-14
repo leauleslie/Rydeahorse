@@ -53,6 +53,15 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
                          released whatever happens. Takes a provider, so the host is not fixed.
   test/                  node --test against a real Postgres branch. Reads, writes, isolation,
                          RLS and the engine mapping — see db/test/README.md.
+server/                  The HTTP layer, and the thinnest thing here. Resolves a tenant, calls
+                         the repository through withRequest, returns JSON. No rule is evaluated
+                         in it and no query is written in it.
+  index.js               Express. Requires APP_DATABASE_URL explicitly — it will not fall back
+                         to DATABASE_URL, so the app and the suites are never one variable
+                         apart. Tenant resolution is a STUB until coach auth exists.
+app/                     Phase 1a screens. Vite + React.
+  src/App.jsx            The prototype, moved here and fed real rows. Still carries its own copy
+                         of the rules — see "Two copies of the rules".
 ```
 
 `npm test` from `engine/`. No install step — the suite is `node --test test/*.test.js`.
@@ -319,6 +328,15 @@ overturned it, rather than only in code.
   and it is what decides the shape of the request layer.
 - **Occurrence generation is still unextracted**, and belongs with the scheduled job that calls
   it rather than with the matching module.
+- **The screens over-offer a shared horse.** `app/src/App.jsx` still uses the prototype's own
+  `findOpenSlots`, which takes ONE booking list — so the Day view offers a horse the barn-mate
+  is riding. Visible today: 1:00 PM reads "Comet, Willow available" while trainer A2 has both.
+  `engine/matching.js` takes `bookings` (the barn, for horses) and `trainerBookings` (this
+  coach, for the coach) precisely for this, and the fix is the migration below rather than a
+  patch to the prototype's copy.
+- **Writes from the screens are local only.** The app loads real rows and renders them, but its
+  handlers still mutate React state rather than calling the API. The endpoints exist and are
+  tested (`server/index.js`); nothing is wired to them yet, so a refresh discards changes.
 - Neither a horse nor a rider can be deleted today, only deactivated — which is what makes the
   many `horses.find(...)` / `students.find(...)` lookups in the render path safe. **Adding a
   deletion path requires migrating those lookups to null-safe helpers first**, not after; every

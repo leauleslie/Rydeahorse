@@ -160,6 +160,26 @@ export function toEngineOffer(row) {
   };
 }
 
+/**
+ * A recurring pattern, in the shape the screens speak: a weekday INDEX and an "HH:MM", not the
+ * `'tue'` / `'09:00:00'` the column holds. Same translation the availability mapping does, for
+ * the same reason — `day` is compared against `Date#getDay()`.
+ */
+export function toEngineRecurring(row) {
+  return {
+    id: row.id,
+    studentId: row.studentId,
+    horseId: row.horseId,
+    lessonTypeId: row.lessonTypeId,
+    day: DOW_INDEX[row.dayOfWeek],
+    start: toHHMM(row.startTime),
+    status: row.status,
+    startDate: toDate(row.startDate),
+    endDate: toDate(row.endDate),
+    notes: row.notes,
+  };
+}
+
 /** `student_riding_windows` rows -> the engine's `{ day, start, end }`, split by kind. */
 export function toEngineRidingWindows(rows) {
   const target = [];
