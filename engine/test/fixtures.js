@@ -54,6 +54,13 @@ export const students = [
     weight: 140,
     noRideHorses: [],
     frequencyTier: 0,
+    // ---- read by matching.js only; the rules ignore these ----
+    active: true,
+    profileStatus: "approved",
+    notificationPref: "target_and_potential",
+    // Tue 09:00-12:00 is the window every matching test aims at.
+    targetTimes: [{ day: 2, start: "09:00", end: "12:00" }],
+    potentialTimes: [{ day: 3, start: "14:00", end: "17:00" }],
   },
   {
     id: "jordan",
@@ -64,6 +71,13 @@ export const students = [
     weight: 90,
     noRideHorses: [],
     frequencyTier: 0,
+    active: true,
+    profileStatus: "approved",
+    // Only wants the times they actually asked for — the flag that must suppress a
+    // potential-window match.
+    notificationPref: "target_only",
+    targetTimes: [{ day: 2, start: "09:00", end: "12:00" }],
+    potentialTimes: [{ day: 2, start: "13:00", end: "16:00" }],
   },
 ];
 
@@ -82,6 +96,7 @@ export const lessonTypes = [
     restrictedHorseIds: [],
     ridingStyles: [],
     isGroup: false,
+    potentialEligible: true,
   },
   {
     id: "group90",
@@ -98,8 +113,30 @@ export const lessonTypes = [
     ridingStyles: [],
     isGroup: true,
     maxGroupSize: 3,
+    // Set true on purpose: the rule is that a GROUP type can never be offered as gap-fill, and
+    // a fixture with the flag already false could not tell whether that rule was applied.
+    potentialEligible: true,
   },
 ];
+
+// findIntroOptions needs a type flagged isIntro; the two above are deliberately not.
+export const introType = {
+  id: "intro45",
+  name: "Intro lesson",
+  durationMin: 45,
+  rideTimeMin: 35,
+  basePrice: 40,
+  minPrice: 40,
+  maxPrice: 40,
+  bandAdjustments: {},
+  freqDiscount1: 0,
+  freqDiscount2: 0,
+  restrictedHorseIds: [],
+  ridingStyles: [],
+  isGroup: false,
+  isIntro: true,
+  potentialEligible: false,
+};
 
 export const priceBands = [
   { id: "evening", name: "Evening", days: [1, 2, 3, 4, 5], start: "15:00", end: "19:00" },

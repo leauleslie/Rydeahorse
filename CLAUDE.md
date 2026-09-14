@@ -32,6 +32,9 @@ engine/                  The rules and pricing engine. Pure JS, no dependencies.
   derive.js              Occurrence type, horse assignment, status, ride tallies, cancellation.
   pricing.js             Bands, frequency tiers, the ratchet, priceFor.
   rules.js               Availability, pairing, usage caps, rest days, validateBooking.
+  matching.js            A layer ABOVE the rules: open slots, who to offer them to, intro and
+                         recurring options. Calls into rules; nothing in rules calls back, and
+                         test/layering.test.js asserts that stays true.
   test/                  node --test. 41 tests, no framework, no dependencies.
 db/                      Postgres schema, migrations, and the repository. Drizzle for schema
                          and migration generation; no ORM behaviour beyond query building.
@@ -115,6 +118,12 @@ priceFor({ student, lessonType, date, start, offerDiscount, manualAdjustment,
 does **not** short-circuit — the order decides which reason gets reported, and a validation
 checklist has to show the whole picture at once. `firstFailure(validation)` takes the reported
 reason off the front — it takes the whole result, not its `checks` array.
+
+`validateBooking` takes **two booking lists**, not one. `bookings` is everything relevant to the
+HORSE — account-wide, because welfare counts every lesson the animal did — while
+`trainerBookings` is this coach's alone and defaults to `bookings`. One list fed to both halves
+reports a coach as busy while their barn-mate is teaching. The engine still never asks who a
+booking belongs to; it is handed two sets with stated meanings (`db/SCHEMA-NOTES.md` §16).
 
 `priceFor` never returns a bare number. Every screen that shows a price must be able to show
 the reasoning behind it, so the components always come back with the total.
@@ -308,11 +317,8 @@ overturned it, rather than only in code.
 - **Coach authentication has no mechanism.** `trainers.email` is the identifier it will key on
   and nothing more (`db/SCHEMA-NOTES.md` §5). Screens need a stubbed trainer id until it exists,
   and it is what decides the shape of the request layer.
-- **Not yet extracted from the prototype**, and the natural next module *on top of* the engine:
-  slot finding and matching — `findOpenSlots`, `findIntroOptions`, `findRecurringOptions`,
-  `eligibleStudentsForSlot`, `offerRespectsPreferences`. They're pure and rules-dependent, but
-  they're a layer above: the engine answers "may this booking exist," matching answers "what
-  should we suggest." Occurrence generation belongs with the scheduled job that calls it.
+- **Occurrence generation is still unextracted**, and belongs with the scheduled job that calls
+  it rather than with the matching module.
 - Neither a horse nor a rider can be deleted today, only deactivated — which is what makes the
   many `horses.find(...)` / `students.find(...)` lookups in the render path safe. **Adding a
   deletion path requires migrating those lookups to null-safe helpers first**, not after; every

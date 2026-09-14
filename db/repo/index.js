@@ -48,6 +48,8 @@ import {
   toEngineTimeOff,
   toEnginePriceBands,
   toEngineTrainerConfig,
+  toEngineOffer,
+  toEngineRidingWindows,
 } from "./to-engine.js";
 import { trainers } from "../schema/index.js";
 import { writesFor } from "./writes.js";
@@ -259,6 +261,7 @@ export function forTenant(db, { accountId, trainerId, client = null }) {
         horseRows, studentRows, lessonTypeRows, bookingRows,
         availabilityRows, timeOffRows, bandRows, windowRows,
         noRideRows, adjustmentRows, restrictedRows, trainerRows,
+        ridingWindowRows, offerRows,
       ] = await Promise.all([
         db.select().from(horses).where(eq(horses.accountId, accountId)),
         db.select().from(students).where(eq(students.trainerId, trainerId)),
@@ -273,11 +276,20 @@ export function forTenant(db, { accountId, trainerId, client = null }) {
         db.select().from(lessonTypeBandAdjustments).where(eq(lessonTypeBandAdjustments.trainerId, trainerId)),
         db.select().from(lessonTypeRestrictedHorses).where(inArray(lessonTypeRestrictedHorses.lessonTypeId, ownLessonTypeIds)),
         db.select().from(trainers).where(eq(trainers.id, trainerId)),
+        // Matching needs both: a student's own windows decide whether a slot is worth offering
+        // them at all, and past offers decide the order.
+        db.select().from(studentRidingWindows).where(inArray(studentRidingWindows.studentId, ownStudentIds)),
+        db.select().from(offers).where(eq(offers.trainerId, trainerId)),
       ]);
 
       // Group the junctions once, rather than filtering inside each map — a lesson type with
       // no adjustments must still come back with `{}` and not `undefined`, because the engine
       // indexes into it.
+      const windowsByStudent = new Map();
+      for (const r of ridingWindowRows) {
+        if (!windowsByStudent.has(r.studentId)) windowsByStudent.set(r.studentId, []);
+        windowsByStudent.get(r.studentId).push(r);
+      }
       const noRideByStudent = new Map();
       for (const r of noRideRows) {
         if (!noRideByStudent.has(r.studentId)) noRideByStudent.set(r.studentId, []);
@@ -304,17 +316,26 @@ export function forTenant(db, { accountId, trainerId, client = null }) {
         date,
         horses: horseRows.map(toEngineHorse),
         students: studentRows.map((r) =>
-          toEngineStudent(r, { noRideHorseIds: noRideByStudent.get(r.id) ?? [] })),
+          toEngineStudent(r, {
+            noRideHorseIds: noRideByStudent.get(r.id) ?? [],
+            ridingWindows: toEngineRidingWindows(windowsByStudent.get(r.id) ?? []),
+          })),
         lessonTypes: lessonTypeRows.map((r) =>
           toEngineLessonType(r, {
             bandAdjustments: adjustmentsByType.get(r.id) ?? {},
             restrictedHorseIds: restrictedByType.get(r.id) ?? [],
           })),
+        // Two scopes, because two rules need different ones. `bookings` is the whole account —
+        // horse welfare and the horse half of double-booking count every lesson the animal did,
+        // whoever booked it. `trainerBookings` is this coach alone, because reporting a coach as
+        // busy while their barn-mate teaches refuses a slot that is genuinely free.
         bookings: bookingRows.map(toEngineBooking),
+        trainerBookings: bookingRows.filter((b) => b.trainerId === trainerId).map(toEngineBooking),
         availability: toEngineAvailability(availabilityRows),
         timeOffBlocks: toEngineTimeOff(timeOffRows),
         priceBands: toEnginePriceBands(bandRows, windowRows),
         trainerConfig: toEngineTrainerConfig(trainerRows[0]),
+        offers: offerRows.map(toEngineOffer),
       };
     },
 

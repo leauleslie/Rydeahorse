@@ -158,6 +158,36 @@ describe("welfare and the shared horse", () => {
     assert.ok(ctx.bookings.some((b) => !mine.has(b.id)));
   });
 
+  test("the two booking scopes are both supplied, and they differ", () => {
+    // The distinction this exists for: one list is the barn, the other is the coach. If they
+    // were ever the same array, one of the two rules that read them would be wrong.
+    assert.equal(ctx.bookings.length, alder.accountBookings.length, "the barn");
+    assert.equal(ctx.trainerBookings.length, a1.bookings.length, "this coach alone");
+    assert.ok(ctx.trainerBookings.length < ctx.bookings.length, "and the barn is bigger");
+    const mine = new Set(a1.bookings);
+    assert.ok(ctx.trainerBookings.every((b) => mine.has(b.id)));
+  });
+
+  test("a barn-mate's lesson blocks the HORSE but not the COACH", () => {
+    // Two bugs used to cancel here. A barn-mate's lesson type is unreadable to this coach, and
+    // the conflict check gave an unreadable type zero duration — so the horse read as free. Fix
+    // that alone and the coach then reads as busy, because bookings are loaded account-wide.
+    // Only the two scopes together give both answers correctly.
+    const willow = horseNamed("Willow");
+    const barnMateSlot = "13:00"; // the other coach teaches Willow here; a1 teaches nothing
+    const v = validateBooking({
+      ...ctx,
+      student: studentNamed("Alex Morgan"),
+      horse: willow,
+      lessonType: typeNamed("Private Lesson"),
+      date: DATE,
+      start: barnMateSlot,
+    });
+    const byCode = Object.fromEntries(v.checks.map((c) => [c.code, c.pass]));
+    assert.equal(byCode.horse_free, false, "the horse IS taken, by the barn-mate");
+    assert.equal(byCode.trainer_free, true, "but this coach is free — it is not her lesson");
+  });
+
   test("none of another ACCOUNT's lessons are in scope", () => {
     const foreign = new Set(birch.accountBookings);
     assert.ok(ctx.bookings.every((b) => !foreign.has(b.id)),

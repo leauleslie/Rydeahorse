@@ -447,3 +447,35 @@ test("an occurrence moved off its pattern reads as ad hoc", () => {
   assert.equal(occurrenceType(moved, recurring, lessonTypes), "adhoc");
   assert.equal(horseAssignment(moved, recurring, horses).isOrphan, true);
 });
+
+// ---------------------------------------------------------------------------
+// Added after a shared-horse defect: an unmeasurable lesson must never read as free.
+// ---------------------------------------------------------------------------
+
+test("a booking's STORED end wins over its lesson type's duration", () => {
+  // The booking is the fact; the lesson type is a reconstruction of it. Editing a type's
+  // duration in November must not resize October's lessons, and this is where that bites.
+  const long = F.booking({ date: d(19), start: "10:00", end: "12:00", lessonTypeId: "private60" });
+  const v = validateBooking(F.request({ date: d(19), start: "11:00", bookings: [long] }));
+  assert.ok(fails(v, "horse_free"), "11:00 is inside the stored 10:00-12:00, not the type's hour");
+});
+
+test("an unreadable lesson type counts as a CONFLICT, never as zero minutes", () => {
+  // The hole this closes: `bStart + (bLt ? bLt.durationMin : 0)` gave an unresolvable type zero
+  // duration, so it overlapped nothing and the horse read as FREE. Lesson types are
+  // trainer-scoped, so this is the ordinary case on a horse two coaches share.
+  const barnMate = F.booking({ date: d(19), start: "10:00", lessonTypeId: "another-coaches-type" });
+  delete barnMate.end;
+  const v = validateBooking(F.request({ date: d(19), start: "10:00", bookings: [barnMate] }));
+  assert.ok(fails(v, "horse_free"),
+    "an unmeasurable lesson must not read as free — a refusal is recoverable, a double-booking is not");
+});
+
+test("failing safe does not mean failing always: a cancelled unreadable lesson frees its slot", () => {
+  const cancelled = F.booking({
+    date: d(19), start: "10:00", lessonTypeId: "another-coaches-type", status: "early_cancel",
+  });
+  delete cancelled.end;
+  const v = validateBooking(F.request({ date: d(19), start: "10:00", bookings: [cancelled] }));
+  assert.ok(!fails(v, "horse_free"));
+});

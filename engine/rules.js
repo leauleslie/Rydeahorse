@@ -154,6 +154,18 @@ export function validateBooking({
   date,
   start,
   bookings,
+  // The coach's OWN lessons. Defaults to `bookings`, which is right whenever every booking in
+  // play belongs to one trainer — the single-coach case, and what the prototype assumes.
+  //
+  // It stops being right in a barn with two coaches. Horse welfare and the horse half of
+  // double-booking have to count every lesson the animal did, whoever booked it, so `bookings`
+  // is loaded account-wide. Feeding that same list to the TRAINER half then reports a coach as
+  // busy while it is their barn-mate teaching — a slot that is genuinely free, refused.
+  //
+  // Two lists rather than a trainer id on the booking, deliberately: the engine still cannot
+  // ask who anything belongs to. It is handed two sets with stated meanings and never learns
+  // that tenancy exists.
+  trainerBookings = bookings,
   students,
   lessonTypes,
   availability,
@@ -210,13 +222,30 @@ export function validateBooking({
   // 6. No double-booking — two separately reported halves, since they fail for different
   //    reasons and only one of them can ever relax.
   const conflictsWith = (b) => {
-    const bLt = lessonTypes.find((l) => l.id === b.lessonTypeId);
+    if (!sameDay(b.date, date) || !holdsSlot(b)) return false;
     const bStart = parseTime(b.start);
-    return (
-      sameDay(b.date, date) &&
-      holdsSlot(b) &&
-      overlaps(bStart, bStart + (bLt ? bLt.durationMin : 0), startMin, endMin)
-    );
+
+    // When a lesson ends, in order of how much the answer can be trusted.
+    //
+    // This used to be `bStart + (bLt ? bLt.durationMin : 0)`, and the `: 0` was a silent
+    // double-booking hole. A booking whose lesson type is not in the array given to this
+    // function got ZERO duration, overlapped nothing, and the horse read as FREE — which is
+    // exactly what happens on a horse shared between two coaches, because lesson types are
+    // trainer-scoped and the barn-mate's is unreadable. The database's exclusion constraint
+    // still refused the insert, so no horse was ever actually double-booked, but the coach was
+    // offered a slot that could not be taken.
+    //
+    // A booking's own stored end is the fact; the lesson type's duration is a reconstruction of
+    // it. Prefer the fact.
+    if (b.end) return overlaps(bStart, parseTime(b.end), startMin, endMin);
+
+    const bLt = lessonTypes.find((l) => l.id === b.lessonTypeId);
+    if (bLt) return overlaps(bStart, bStart + bLt.durationMin, startMin, endMin);
+
+    // Neither available: this lesson is real and occupies an unknown span. Welfare and safety
+    // checks never relax, so an unmeasurable lesson counts as a conflict rather than as
+    // nothing. A refusal is recoverable; a double-booked horse is not.
+    return true;
   };
 
   // The horse half never relaxes: every rider needs their own horse.
@@ -226,9 +255,10 @@ export function validateBooking({
     pass: !bookings.some((b) => b.horseId === horse.id && conflictsWith(b)),
   });
 
-  // The trainer half relaxes only for a genuine group session below capacity.
+  // The trainer half relaxes only for a genuine group session below capacity — and it asks
+  // only about THIS coach's lessons.
   const key = { lessonTypeId: lessonType.id, date, start };
-  const clashes = bookings.filter(conflictsWith);
+  const clashes = (trainerBookings || []).filter(conflictsWith);
   const allSameGroup =
     clashes.length > 0 && lessonType.isGroup && clashes.every((b) => sameGroupSession(b, key));
   const roomInGroup = allSameGroup && clashes.length < (lessonType.maxGroupSize || 0);

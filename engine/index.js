@@ -8,3 +8,8 @@ export * from "./constants.js";
 export * from "./pricing.js";
 export * from "./derive.js";
 export * from "./rules.js";
+
+// Matching sits ABOVE the rules: they answer "may this booking exist?", it answers "what should
+// we suggest?". The dependency runs one way only — matching imports from rules, never the
+// reverse — and test/layering.test.js asserts it stays that way.
+export * from "./matching.js";

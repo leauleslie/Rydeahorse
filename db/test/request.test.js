@@ -196,26 +196,35 @@ describe("the pool fails fast rather than hanging", () => {
   test("checkout is bounded when the pool is exhausted", async () => {
     // An unbounded pool turns one slow query into a queue of hung requests with no error to
     // show anyone. This asserts the ceiling exists.
-    const pool = testPool({ max: 1, connectionTimeoutMillis: 400 });
+    const pool = testPool({ max: 1, connectionTimeoutMillis: 1000 });
+    let releaseHeld;
+    let markAcquired;
+    const held = new Promise((resolve) => { releaseHeld = resolve; });
+    const acquired = new Promise((resolve) => { markAcquired = resolve; });
+
+    const holding = withRequest(poolProvider(pool), tenantA1, async (repo) => {
+      await repo.students.list();
+      markAcquired();
+      await held; // keep the only connection checked out
+    });
+
     try {
-      const provider = poolProvider(pool);
-      let releaseHeld;
-      const held = new Promise((resolve) => { releaseHeld = resolve; });
-
-      const holding = withRequest(provider, tenantA1, async (repo) => {
-        await repo.students.list();
-        await held; // keep the only connection checked out
-      });
-
+      // Wait until the pool is genuinely saturated. Racing the first connect instead — Neon's
+      // is around a second cold — was what made the first version of this test fail for a
+      // reason unrelated to the ceiling it was checking.
+      await acquired;
       await assert.rejects(
-        withRequest(provider, tenantA1, (repo) => repo.students.list()),
-        /timeout exceeded when trying to connect/i,
+        withRequest(poolProvider(pool), tenantA1, (repo) => repo.students.list()),
+        /timeout/i,
         "the second request must time out, not wait forever",
       );
-
-      releaseHeld();
-      await holding;
     } finally {
+      // In a `finally` on purpose. The first version released the held connection only after the
+      // assertion, so an assertion FAILURE left it checked out forever and the whole suite hung
+      // on `await holding` — a failing test that reports as a hang is worse than one that
+      // reports as a failure.
+      releaseHeld();
+      await holding.catch(() => {});
       await pool.end();
     }
   });

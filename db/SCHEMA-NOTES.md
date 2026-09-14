@@ -414,7 +414,46 @@ numbers at their current values so that closing the gap makes them fail loudly.
 **What would reopen this:** the first account with two trainers sharing a horse — at which point
 the caps are wrong in production, not just in a fixture.
 
-## 16. Smaller calls, listed for completeness
+## 16. One booking list was doing two jobs, and two bugs were hiding each other
+
+Found while extracting slot finding, which was the first code to ask "what should we suggest?"
+rather than "is this one booking allowed?".
+
+`engineInputsFor` loads bookings **account-wide**, which §15 explains is required: horse welfare
+counts every lesson the animal did, whoever booked it. That one list was then handed to every
+check in `validateBooking`. Two of those checks want different scopes, and both were wrong in
+ways that cancelled out.
+
+**The horse half read a barn-mate's lesson as zero minutes long.** `conflictsWith` ended a
+booking at `bStart + (bLt ? bLt.durationMin : 0)`. Lesson types are trainer-scoped, so a
+barn-mate's type is not in the array this trainer was handed — `bLt` was undefined, the lesson
+got **zero** duration, overlapped nothing, and the horse reported as FREE while it was being
+ridden. The database's exclusion constraint still refused the insert, so no horse was ever
+actually double-booked; the coach was simply offered a slot that could not be taken.
+
+Fixed by reading the booking's own stored `end_time` — the fact — in preference to
+reconstructing it from a lesson type, which is only a description of it. When neither is
+available the lesson now counts as a **conflict** rather than as nothing: welfare and safety
+checks never relax, and a refusal is recoverable where a double-booking is not.
+
+**The trainer half then started refusing free slots.** With the first bug fixed, the
+account-wide list made `trainer_free` report a coach as busy while it was their barn-mate
+teaching. The two defects had been masking each other, which is why neither showed up in a test
+that only ever ran one trainer.
+
+**Decided:** `validateBooking` takes two lists — `bookings` (the barn, for the horse and for
+welfare) and `trainerBookings` (this coach, for the trainer half), defaulting to the same array
+so every single-coach caller is unchanged. Two lists rather than a `trainer_id` on the booking,
+deliberately: the engine still cannot ask who anything belongs to. It is handed two sets with
+stated meanings and never learns that tenancy exists — the boundary CLAUDE.md draws survives
+intact.
+
+Note what this does NOT fix: §15's saddle-time under-count still stands. Scheduling conflicts
+need a lesson's END, which is stored; welfare needs its RIDE TIME, which is not — and ride time
+is deliberately less than duration, so one cannot be derived from the other. The third exception
+to derive-don't-store is still owed its argument.
+
+## 17. Smaller calls, listed for completeness
 
 - **`Message_Log.timestamp` → `message_log.sent_at`.** `timestamp` collides with the type name
   in every statement that touches it.

@@ -69,7 +69,10 @@ export function toEngineHorse(row) {
 }
 
 /** @param noRideHorseIds ids from `student_no_ride_horses` for THIS student */
-export function toEngineStudent(row, { noRideHorseIds = [] } = {}) {
+export function toEngineStudent(
+  row,
+  { noRideHorseIds = [], ridingWindows = { target: [], potential: [] } } = {},
+) {
   return {
     id: row.id,
     name: row.name,
@@ -82,6 +85,17 @@ export function toEngineStudent(row, { noRideHorseIds = [] } = {}) {
     weight: row.weight ?? 0,
     noRideHorses: noRideHorseIds,
     frequencyTier: row.frequencyTier ?? 0,
+
+    // ---- read by matching only; the rules ignore all of these ----
+    // Offering a time nobody asked for is noise, so matching needs to know what they asked for.
+    active: row.active,
+    profileStatus: row.profileStatus,
+    // `notification_preference` -> `notificationPref`. The value `all` is specified but behaves
+    // as `target_and_potential` today, and this mapping does not paper over that — both
+    // consumers drop a student whose windows miss the slot before the preference is read.
+    notificationPref: row.notificationPreference,
+    targetTimes: ridingWindows.target,
+    potentialTimes: ridingWindows.potential,
   };
 }
 
@@ -107,6 +121,9 @@ export function toEngineLessonType(row, { bandAdjustments = {}, restrictedHorseI
     ridingStyles: row.ridingStyles ?? [],
     isGroup: row.isGroup,
     maxGroupSize: row.maxGroupSize,
+    // Whether the coach offers this type as gap-fill. A group type can never qualify, and the
+    // schema forces the flag off for one — so matching's own check is belt and braces.
+    potentialEligible: row.potentialLessonEligible,
     // A role is a flag, never an id. Carried through so nothing downstream is tempted to
     // compare against a generated uuid to decide what an intro lesson is.
     isIntro: row.isIntro,
@@ -121,9 +138,37 @@ export function toEngineBooking(row) {
     lessonTypeId: row.lessonTypeId,
     date: toDate(row.date),
     start: toHHMM(row.startTime),
+    // The stored end, not a duration to be re-derived. Matching reads this to decide whether a
+    // horse or a coach is busy across a candidate slot, and on a horse shared between two
+    // trainers the barn-mate's lesson type is not readable — so reconstructing the end from it
+    // would guess. `bookings.end_time` exists precisely so it does not have to.
+    end: toHHMM(row.endTime),
     status: row.status,
     isBillable: row.isBillable,
   };
+}
+
+/** Offers, as `offerStats` and `eligibleStudentsForSlot` read them. */
+export function toEngineOffer(row) {
+  return {
+    id: row.id,
+    studentId: row.studentId,
+    date: toDate(row.date),
+    start: toHHMM(row.startTime),
+    kind: row.kind,
+    offerDiscount: row.offerDiscount,
+  };
+}
+
+/** `student_riding_windows` rows -> the engine's `{ day, start, end }`, split by kind. */
+export function toEngineRidingWindows(rows) {
+  const target = [];
+  const potential = [];
+  for (const r of rows) {
+    const w = { day: DOW_INDEX[r.dayOfWeek], start: toHHMM(r.startTime), end: toHHMM(r.endTime) };
+    (r.kind === "target" ? target : potential).push(w);
+  }
+  return { target, potential };
 }
 
 export function toEngineAvailability(rows) {
