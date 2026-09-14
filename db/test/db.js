@@ -73,9 +73,34 @@ export async function releaseSuiteLock(client) {
   await client.query("select pg_advisory_unlock($1::bigint)", [SUITE_LOCK_KEY]);
 }
 
+// Every one of these exists because a suite hung for 648 seconds instead of failing.
+//
+// Neon terminated a connection that a concurrency test was holding a transaction on, and
+// node-postgres left the in-flight query's promise unsettled — so the test waited for the
+// runner to give up rather than erroring. The logs read `read ECONNRESET` and `Connection
+// terminated unexpectedly` AFTER the test had already been abandoned.
+//
+// None of this makes a dropped connection less likely. It makes one fail in seconds, with a
+// message, instead of looking like a deadlock. `query_timeout` is the load-bearing one: it is
+// client-side, so it fires even when the socket is gone and no server-side timeout ever will.
+const CLIENT_TIMEOUTS = {
+  keepAlive: true,
+  connectionTimeoutMillis: 15_000,
+  // Client-side. The backstop for a socket that died mid-query.
+  query_timeout: 60_000,
+  // Server-side. Kills a runaway query rather than letting it hold a lock.
+  statement_timeout: 30_000,
+  // Generous on purpose: the concurrency suites deliberately hold a transaction open while
+  // another one races them. That is seconds, never a minute.
+  idle_in_transaction_session_timeout: 60_000,
+};
+
 /** Open a raw client against the guarded test database. Refuses before opening a socket. */
 export async function connect() {
-  const client = new Client({ connectionString: resolveTestDatabaseUrl() });
+  const client = new Client({
+    connectionString: resolveTestDatabaseUrl(),
+    ...CLIENT_TIMEOUTS,
+  });
   await client.connect();
   return client;
 }

@@ -40,6 +40,8 @@ const DEFAULTS = {
   // A runaway query should die rather than hold a connection out of the pool indefinitely.
   // Applied once per new connection, so it costs nothing per request.
   statementTimeoutMs: 15_000,
+  // The client-side companion to it, covering the case the server cannot: a socket that died.
+  queryTimeoutMs: 30_000,
 };
 
 /**
@@ -53,6 +55,12 @@ export function createPool({ connectionString, ...overrides } = {}) {
     max: cfg.max,
     connectionTimeoutMillis: cfg.connectionTimeoutMillis,
     idleTimeoutMillis: cfg.idleTimeoutMillis,
+    // keepAlive so a dead socket is noticed, and query_timeout so an in-flight query on one
+    // REJECTS rather than hanging. A server-side statement_timeout cannot help there — the
+    // server is already gone. Learned from a test suite that waited 648 seconds on a connection
+    // Neon had terminated.
+    keepAlive: true,
+    query_timeout: cfg.queryTimeoutMs,
   });
 
   // NOT optional. node-postgres emits 'error' on connections that fail while idle in the pool —
