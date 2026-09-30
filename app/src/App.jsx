@@ -1,5 +1,22 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { AlertTriangle, Check, ChevronRight, X, Plus, ArrowLeft, Square, CheckSquare } from "lucide-react";
+// The matching layer, imported rather than reimplemented.
+//
+// Every one of these took ONE booking list and used it for both halves of the question it asks —
+// which horses are free, and whether the coach is. Those have different scopes: a horse is one
+// animal the whole barn shares, while the coach's day is their own. Fed only this trainer's
+// bookings they offered horses a barn-mate was already riding; fed only the barn's they would
+// report a coach busy while their barn-mate teaches. The engine's versions take both lists,
+// which is the entire reason `trainerBookings` exists alongside `bookings`.
+//
+// This is the whole of `engine/matching.js` — "what should we suggest?" — and it is now the one
+// copy. The RULES below ("may this booking exist?") are still a second copy of `engine/rules.js`
+// and `engine/derive.js`. See CLAUDE.md, "Two copies of the rules": one layer repaid, one left.
+import {
+  findOpenSlots, eligibleStudentsForSlot, findIntroOptions, findRecurringOptions,
+  offerRespectsPreferences, potentialLessonTypes, defaultLessonType, coachBusyIntervals,
+  windowCovers, offerStats,
+} from "../../engine/matching.js";
 
 // ---------- constants ----------
 // The simulated clock. Prototype-only: the seeded fixture's lessons are dated around it, so
@@ -12,6 +29,32 @@ const TODAY = new Date(2026, 8, 15); // Tue 15 Sep 2026, matching SIMULATED_TODA
 // lesson later today and a lesson tomorrow morning both read as "not yet". NOW_MIN adds a
 // time of day, kept separate from TODAY so date comparisons elsewhere are untouched.
 const NOW_MIN = 7 * 60; // 7:00 AM
+// The same simulated moment as an instant, for the engine.
+//
+// Engine functions take `now` as a parameter rather than reading a module-level clock, which is
+// what makes the rest-day window and the 24-hour cancel boundary testable at all (engine/clock.js
+// has the full reasoning). This is the one place the prototype's two-part clock is assembled
+// into the single value they expect, so the screens keep one simulated now, not two.
+const NOW = new Date(2026, 8, 15, Math.floor(NOW_MIN / 60), NOW_MIN % 60);
+
+// The screens' vocabulary translated into the matching layer's, in one place.
+//
+// Three renames, and only the first is cosmetic:
+//   availability      the screens call this trainerAvailability
+//   bookings          the BARN's, for questions about a horse — one animal, shared
+//   trainerBookings   this coach's, for questions about their own day
+//
+// The two booking lists are the point. Every function in engine/matching.js takes both, and
+// handing it one list twice is the bug this replaced: the Day view offered horses a barn-mate
+// was already riding. Saying it once here is what keeps the seven call sites from each getting
+// their own chance to get it wrong.
+const matchingCtx = (props) => ({
+  ...props,
+  now: NOW,
+  bookings: props.barnBookings,
+  trainerBookings: props.bookings,
+  availability: props.trainerAvailability,
+});
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Mon-first display, matches how availability reads naturally
@@ -481,38 +524,6 @@ function isDateInTimeOff(date, timeOffBlocks) {
   return (timeOffBlocks || []).some((b) => date >= b.startDate && date <= b.endDate);
 }
 
-// Coach-level (not horse-level) busy intervals for a date -- used only to decide what times
-// to *offer*, not to block a booking outright. A group session always counts as busy here:
-// group types are never offered as potential lessons, so there is nothing to join.
-function coachBusyIntervals(date, bookings, lessonTypes) {
-  return bookings.filter((b) => sameDay(b.date, date) && (b.status === "pending" || b.status === "confirmed")).map((b) => {
-    const lt = lessonTypes.find((l) => l.id === b.lessonTypeId);
-    const start = parseTime(b.start);
-    return { start, end: start + (lt ? lt.durationMin : 60) };
-  }).sort((a, b) => a.start - b.start);
-}
-
-// Minimum buffer is always required around every existing lesson. Maximum buffer + the
-// back-to-back cap only apply when *offering* times, and only matter when the coach's
-// preference is back-to-back.
-function offerRespectsPreferences(date, startMin, durationMin, bookings, lessonTypes, trainerConfig) {
-  const busy = coachBusyIntervals(date, bookings, lessonTypes);
-  const endMin = startMin + durationMin;
-  for (const b of busy) {
-    if (endMin + trainerConfig.minBufferMin <= b.start || startMin - trainerConfig.minBufferMin >= b.end) continue;
-    return false;
-  }
-  if (trainerConfig.schedulingPreference === "back_to_back") {
-    let streak = 0, cursor = startMin;
-    const precedingFirst = [...busy].sort((a, b) => b.end - a.end);
-    for (const b of precedingFirst) {
-      if (b.end <= cursor && cursor - b.end <= trainerConfig.maxBufferMin) { streak++; cursor = b.start; } else if (b.end <= cursor) break;
-    }
-    if (streak >= trainerConfig.maxBackToBack) return false;
-  }
-  return true;
-}
-
 function generateOccurrences(rec, count) {
   const dates = [];
   let d = new Date(TODAY);
@@ -904,145 +915,6 @@ function forecastUsageCapStatus(horse, date, bookings, lessonTypes, students) {
   return overall > horse.maxDailyOverall || adult > horse.maxDailyAdult ? "red" : "green";
 }
 
-// Which lesson types the coach has opted into offering as potential lessons. Group types can
-// never qualify -- coordinating a gap-fill across several riders and horses at once is more
-// than a fill-the-gap offer can carry -- so the flag is forced off for them rather than left
-// to the coach.
-function potentialLessonTypes(lessonTypes) {
-  return lessonTypes.filter((l) => l.potentialEligible && !l.isGroup);
-}
-
-// One entry per open *window*, carrying the potential-eligible lesson types that fit it and,
-// per type, the horses that qualify. Not one entry per window x horse, and not one per
-// window x type: an open-slot count is a count of windows.
-function findOpenSlots(date, horses, lessonTypes, bookings, students, availability, timeOffBlocks, trainerConfig) {
-  const dayIdx = date.getDay();
-  const windows = availability.filter((a) => a.day === dayIdx);
-  if (windows.length === 0 || isDateInTimeOff(date, timeOffBlocks)) return [];
-  const types = potentialLessonTypes(lessonTypes);
-  if (types.length === 0) return [];
-  const out = [];
-  windows.forEach((win) => {
-    for (let t = parseTime(win.start); t < parseTime(win.end); t += 30) {
-      const options = [];
-      types.forEach((lt) => {
-        if (t + lt.durationMin > parseTime(win.end)) return;
-        if (trainerConfig && !offerRespectsPreferences(date, t, lt.durationMin, bookings, lessonTypes, trainerConfig)) return;
-        const horseIds = horses.filter((h) => {
-          if (!h.active) return false;
-          const busy = bookings.some((b) => b.horseId === h.id && sameDay(b.date, date) && (b.status === "pending" || b.status === "confirmed") && parseTime(b.start) < t + lt.durationMin && parseTime(b.start) + (lessonTypes.find((l) => l.id === b.lessonTypeId)?.durationMin || 60) > t);
-          if (busy) return false;
-          if (forecastRestStatus(h, bookings) === "red") return false;
-          return horseMinutesOnDate(h.id, date, bookings, lessonTypes, false, students) + lt.rideTimeMin <= h.maxDailyOverall;
-        }).map((h) => h.id);
-        if (horseIds.length) options.push({ lessonTypeId: lt.id, horseIds });
-      });
-      if (options.length) out.push({ time: minToStr(t), options, horseIds: [...new Set(options.flatMap((o) => o.horseIds))] });
-    }
-  });
-  return out.sort((a, b) => parseTime(a.time) - parseTime(b.time));
-}
-
-function windowCovers(w, date, time) {
-  return w.day === date.getDay() && parseTime(time) >= parseTime(w.start) && parseTime(time) < parseTime(w.end);
-}
-
-// How often this student has taken a potential lesson they were offered. Acceptance is derived
-// (an Offers row with a matching booking), never stored, since Phase 1a has no reply channel.
-// Smoothed as (accepted + 1) / (offered + 2): a student with no history sits at a neutral 0.5
-// rather than at zero, so newcomers aren't buried beneath everyone who has ever said yes, and
-// a single early yes or no doesn't read as a perfect record.
-function offerStats(studentId, ctx) {
-  const mine = ctx.offers.filter((o) => o.studentId === studentId);
-  const accepted = mine.filter((o) => ctx.bookings.some((b) => b.studentId === o.studentId && sameDay(b.date, o.date) && b.start === o.start && b.status !== "early_cancel")).length;
-  return { offered: mine.length, accepted, score: (accepted + 1) / (mine.length + 2) };
-}
-
-// Candidates for an open slot: a student qualifies only if the slot falls inside one of their
-// own target or potential windows -- offering a time nobody asked for is noise. Target matches
-// rank above potential ones (a target offer is full price; a potential one is the discount
-// case), and within each, the students most likely to say yes come first.
-function eligibleStudentsForSlot(date, time, slot, ctx) {
-  const kindRank = { target: 0, potential: 1 };
-  const rows = [];
-  ctx.students.filter((s) => s.active && s.profileStatus === "approved").forEach((s) => {
-    if (ctx.bookings.some((b) => b.studentId === s.id && sameDay(b.date, date) && b.start === time && (b.status === "pending" || b.status === "confirmed"))) return;
-    const kind = s.targetTimes.some((w) => windowCovers(w, date, time)) ? "target"
-      : s.potentialTimes.some((w) => windowCovers(w, date, time)) ? "potential" : null;
-    if (!kind) return;
-    if (kind === "potential" && s.notificationPref === "target_only") return;
-    let match = null;
-    slot.options.forEach((o) => {
-      if (match) return;
-      const lt = ctx.lessonTypes.find((l) => l.id === o.lessonTypeId);
-      const pool = ctx.horses.filter((h) => o.horseIds.includes(h.id));
-      const passing = getEligibleHorses(s, lt, pool).filter((h) => validateBooking({ student: s, horse: h, lessonType: lt, date, start: time, bookings: ctx.bookings, students: ctx.students, lessonTypes: ctx.lessonTypes, availability: ctx.trainerAvailability, timeOffBlocks: ctx.timeOffBlocks, priceBands: ctx.priceBands, trainerConfig: ctx.trainerConfig }).ok);
-      if (passing.length) match = { lessonType: lt, horse: passing[0] };
-    });
-    if (!match) return;
-    rows.push({ student: s, horse: match.horse, lessonType: match.lessonType, kind, stats: offerStats(s.id, ctx), alreadyOffered: ctx.offers.some((o) => o.studentId === s.id && sameDay(o.date, date) && o.start === time) });
-  });
-  return rows.sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || b.stats.score - a.stats.score || a.student.name.localeCompare(b.student.name));
-}
-
-function findIntroOptions(student, horses, lessonTypes, bookings, students, limit, availability, timeOffBlocks, trainerConfig) {
-  const lt = introLessonType(lessonTypes);
-  if (!lt) return []; // a coach with no intro type simply has no intro lessons to offer
-  const eligibleHorses = getEligibleHorses(student, lt, horses);
-  const windows = [...student.targetTimes, ...student.potentialTimes];
-  const out = [];
-  let d = new Date(TODAY);
-  for (let i = 0; i < 30 && out.length < limit; i++) {
-    windows.forEach((w) => {
-      if (out.length >= limit) return;
-      if (d.getDay() !== w.day) return;
-      for (let t = parseTime(w.start); t + lt.durationMin <= parseTime(w.end) && out.length < limit; t += lt.durationMin) {
-        eligibleHorses.forEach((h) => {
-          if (out.length >= limit) return;
-          const startStr = minToStr(t);
-          const v = validateBooking({ student, horse: h, lessonType: lt, date: new Date(d), start: startStr, bookings, students, lessonTypes, availability, timeOffBlocks });
-          if (v.ok && offerRespectsPreferences(d, t, lt.durationMin, bookings, lessonTypes, trainerConfig)) out.push({ date: new Date(d), start: startStr, horseId: h.id });
-        });
-      }
-    });
-    d = addDays(d, 1);
-  }
-  return out;
-}
-
-function findRecurringOptions(student, horses, lessonTypes, bookings, students, limit, availability, timeOffBlocks, trainerConfig) {
-  const lt = defaultLessonType(lessonTypes);
-  if (!lt) return [];
-  const eligibleHorses = getEligibleHorses(student, lt, horses);
-  // Options are drawn only from the student's own riding-time windows, target first so the
-  // times they actually asked for aren't crowded out of the limit by gap-fill windows. Each
-  // option carries the kind forward, because "why is this the list?" is unanswerable on the
-  // screen otherwise.
-  const windows = [
-    ...student.targetTimes.map((w) => ({ ...w, kind: "target" })),
-    ...student.potentialTimes.map((w) => ({ ...w, kind: "potential" })),
-  ];
-  const out = [];
-  windows.forEach((w) => {
-    for (let t = parseTime(w.start); t + lt.durationMin <= parseTime(w.end) && out.length < limit; t += 30) {
-      eligibleHorses.forEach((h) => {
-        if (out.length >= limit) return;
-        const startStr = minToStr(t);
-        let d = new Date(TODAY);
-        while (d.getDay() !== w.day) d = addDays(d, 1);
-        let allPass = true;
-        for (let occ = 0; occ < 4; occ++) {
-          const occDate = addDays(d, occ * 7);
-          const v = validateBooking({ student, horse: h, lessonType: lt, date: occDate, start: startStr, bookings, students, lessonTypes, availability, timeOffBlocks });
-          if (!v.ok || !offerRespectsPreferences(occDate, t, lt.durationMin, bookings, lessonTypes, trainerConfig)) { allPass = false; break; }
-        }
-        if (allPass) out.push({ day: w.day, start: startStr, horseId: h.id, kind: w.kind });
-      });
-    }
-  });
-  return out;
-}
-
 function findMatchesForStudent(student, horses, lessonTypes, bookings, students, availability, timeOffBlocks) {
   const types = potentialLessonTypes(lessonTypes);
   const out = [];
@@ -1095,11 +967,6 @@ function introLessonType(lessonTypes) {
 function isIntroBooking(booking, lessonTypes) {
   const lt = lessonTypes.find((l) => l.id === booking.lessonTypeId);
   return !!(lt && lt.isIntro);
-}
-// The type a form should land on before the coach chooses: the first ordinary one-to-one type,
-// falling back to whatever exists. Never the intro type -- that's a one-off, not a default.
-function defaultLessonType(lessonTypes) {
-  return lessonTypes.find((l) => !l.isIntro && !l.isGroup) || lessonTypes.find((l) => !l.isIntro) || lessonTypes[0] || null;
 }
 
 // Reference lookups that tolerate a missing row. Nothing can be deleted today except a lesson
@@ -1906,7 +1773,7 @@ function Screens({ initial }) {
   }
 
   const shared = {
-    horses, students, lessonTypes, recurringBookings, bookings, inactivePeriods, subAssignments, studentNotes, studentAlerts, trainerAvailability, trainerConfig, timeOffBlocks, offers, notices, priceBands, disclosures, disclosureAcceptances,
+    horses, students, lessonTypes, recurringBookings, bookings, barnBookings, inactivePeriods, subAssignments, studentNotes, studentAlerts, trainerAvailability, trainerConfig, timeOffBlocks, offers, notices, priceBands, disclosures, disclosureAcceptances,
     setHorses, setStudents, setLessonTypes, setRecurringBookings, setBookings, setInactivePeriods, setSubAssignments, setStudentNotes, setStudentAlerts, setTrainerAvailability, setTrainerConfig, setTimeOffBlocks, setOffers, setNotices, setPriceBands, setDisclosures, setDisclosureAcceptances,
     updateBooking, updateStudent, updateHorse, setHorseActive, applyRecurringChange, endRecurringSeries, logOffer, wasOffered, notifyStudent, markStudentAlertsSeen, recomputeFrequencyTiers,
     updateDisclosures, acceptDisclosures,
@@ -2003,16 +1870,21 @@ function Screens({ initial }) {
       today.push({ id: "note-" + n.id, tone: "amber", title: `${st.name} — ${NOTE_CATEGORIES[n.category] || n.category}`, sub: n.note, action: "View", onClick: () => { setSelectedStudentId(st.id); fromAlert("student-profile"); } });
     });
     if (showOpenSlots) {
-      const args = [horses, lessonTypes, bookings, students, trainerAvailability, timeOffBlocks, trainerConfig];
-      const openToday = findOpenSlots(TODAY, ...args).length;
-      const openTomorrow = findOpenSlots(addDays(TODAY, 1), ...args).length;
-      let openWeek = 0; for (let i = 2; i < 7; i++) openWeek += findOpenSlots(addDays(TODAY, i), ...args).length;
+      // `bookings` is the barn's, `trainerBookings` this coach's — the engine asks two different
+      // questions of them and a single list answers one of them wrongly.
+      const args = {
+        now: NOW, horses, lessonTypes, bookings: barnBookings, trainerBookings: bookings,
+        students, availability: trainerAvailability, timeOffBlocks, trainerConfig,
+      };
+      const openToday = findOpenSlots({ ...args, date: TODAY }).length;
+      const openTomorrow = findOpenSlots({ ...args, date: addDays(TODAY, 1) }).length;
+      let openWeek = 0; for (let i = 2; i < 7; i++) openWeek += findOpenSlots({ ...args, date: addDays(TODAY, i) }).length;
       if (openToday) today.push({ id: "open-today", tone: "dashed", title: `${openToday} open slots today`, action: "View day", onClick: () => { setCoachDate(new Date(TODAY)); fromAlert("day"); } });
       if (openTomorrow) tomorrow.push({ id: "open-tom", tone: "dashed", title: `${openTomorrow} open slots tomorrow`, action: "View day", onClick: () => { setCoachDate(addDays(TODAY, 1)); fromAlert("day"); } });
       if (openWeek) week.push({ id: "open-week", tone: "dashed", title: `${openWeek} open slots later this week`, action: "View week", onClick: () => fromAlert("week") });
     }
     return { today, tomorrow, week };
-  }, [bookings, horses, students, recurringBookings, studentNotes, notices, showOpenSlots, lessonTypes, trainerAvailability, timeOffBlocks, trainerConfig, disclosures, disclosureAcceptances]);
+  }, [bookings, barnBookings, horses, students, recurringBookings, studentNotes, notices, showOpenSlots, lessonTypes, trainerAvailability, timeOffBlocks, trainerConfig, disclosures, disclosureAcceptances]);
 
   const attentionCount = [...alerts.today, ...alerts.tomorrow, ...alerts.week].filter((a) => a.tone !== "dashed").length;
 
@@ -2139,7 +2011,9 @@ function SheetRouter(props) {
         for (let t = parseTime(win.start); t + lt.durationMin <= parseTime(win.end) && options.length < 12; t += 30) {
           if (sameDay(d, booking.date) && minToStr(t) === booking.start) continue;
           const v = validateBooking({ student, horse, lessonType: lt, date: d, start: minToStr(t), bookings: bookings.filter((b) => b.id !== booking.id), students, lessonTypes, availability: trainerAvailability, timeOffBlocks, priceBands, trainerConfig });
-          if (v.ok && offerRespectsPreferences(d, t, lt.durationMin, bookings.filter((b) => b.id !== booking.id), lessonTypes, trainerConfig)) options.push({ date: d, start: minToStr(t) });
+          // The lesson being moved must not block its own new time, so it comes out of the
+          // coach's day here exactly as it comes out of `bookings` on the line above.
+          if (v.ok && offerRespectsPreferences({ date: d, startMin: t, durationMin: lt.durationMin, trainerBookings: bookings.filter((b) => b.id !== booking.id), lessonTypes, trainerConfig })) options.push({ date: d, start: minToStr(t) });
         }
       });
     }
@@ -2209,14 +2083,22 @@ function SheetRouter(props) {
 
   if (sheet.type === "notify") {
     const { date, time, slot } = sheet.ctx;
-    return <NotifySheet date={date} time={time} priceBands={priceBands} trainerConfig={trainerConfig} candidates={eligibleStudentsForSlot(date, time, slot, props)} onSend={(picked, discount, reason) => { picked.forEach((c, i) => logOffer(c.student.id, date, time, c.horse.id, c.kind, c.lessonType.id, i + 1, c.kind === "potential" ? discount : 0, c.kind === "potential" ? reason : "")); close(); }} onClose={close} />;
+    return <NotifySheet date={date} time={time} priceBands={priceBands} trainerConfig={trainerConfig} candidates={eligibleStudentsForSlot({ ...matchingCtx(props), date, time, slot })} onSend={(picked, discount, reason) => { picked.forEach((c, i) => logOffer(c.student.id, date, time, c.horse.id, c.kind, c.lessonType.id, i + 1, c.kind === "potential" ? discount : 0, c.kind === "potential" ? reason : "")); close(); }} onClose={close} />;
   }
 
   if (sheet.type === "recurring-slot") {
     const rec = recurringBookings.find((r) => r.id === sheet.ctx.recurringId);
     if (!rec) return null;
     const student = students.find((s) => s.id === rec.studentId);
-    const options = findRecurringOptions(student, horses, lessonTypes, bookings.filter((b) => b.recurringId !== rec.id), students, 10, trainerAvailability, timeOffBlocks, trainerConfig);
+    // A series being rescheduled must not block itself, so its own lessons come out of BOTH
+    // lists — out of the barn's or the horse still reads as busy at the time it is moving away
+    // from, and out of the coach's or every slot it currently occupies stays unofferable.
+    const ctx = matchingCtx(props);
+    const withoutSeries = (list) => (list || []).filter((b) => b.recurringId !== rec.id);
+    const options = findRecurringOptions({
+      ...ctx, student, limit: 10,
+      bookings: withoutSeries(ctx.bookings), trainerBookings: withoutSeries(ctx.trainerBookings),
+    });
     const horseOnly = sheet.ctx.mode === "horse";
     const shown = horseOnly ? options.filter((o) => o.day === rec.day && o.start === rec.start) : options;
     return (
@@ -2363,16 +2245,16 @@ function PriceSheet({ booking, lessonTypes, priceBands, isRecurring, onSave, onC
 
 // ---------- coach screens ----------
 function DayView(props) {
-  const { coachDate, setCoachDate, horses, showOpenSlots, setSelectedBookingId, navTo, setInactivateHorseId, timeOffBlocks, trainerAvailability, trainerConfig, lessonTypes, bookings, students, offers, setSheet } = props;
+  const { coachDate, setCoachDate, horses, showOpenSlots, setSelectedBookingId, navTo, setInactivateHorseId, timeOffBlocks, trainerAvailability, trainerConfig, lessonTypes, bookings, barnBookings, students, offers, setSheet } = props;
   const [showAllSlots, setShowAllSlots] = useState(false);
   const [onlyMatched, setOnlyMatched] = useState(false);
   const rows = rowsForDate(props, coachDate);
   const inactiveHorses = horses.filter((h) => !h.active);
   const offBlock = timeOffBlocks.find((b) => coachDate >= b.startDate && coachDate <= b.endDate);
-  const openSlots = showOpenSlots ? findOpenSlots(coachDate, horses, lessonTypes, bookings, students, trainerAvailability, timeOffBlocks, trainerConfig) : [];
+  const openSlots = showOpenSlots ? findOpenSlots({ date: coachDate, now: NOW, horses, lessonTypes, bookings: barnBookings, trainerBookings: bookings, students, availability: trainerAvailability, timeOffBlocks, trainerConfig }) : [];
   // Most open windows have nobody who asked for that time. Filtering to the ones that do is
   // the difference between scrolling a day's worth of empty slots and seeing the two worth acting on.
-  const matchedSlots = onlyMatched ? openSlots.filter((slot) => eligibleStudentsForSlot(coachDate, slot.time, slot, props).length > 0) : openSlots;
+  const matchedSlots = onlyMatched ? openSlots.filter((slot) => eligibleStudentsForSlot({ ...matchingCtx(props), date: coachDate, time: slot.time, slot }).length > 0) : openSlots;
   const visibleSlots = showAllSlots ? matchedSlots : matchedSlots.slice(0, 4);
   const offersFor = (time) => offers.filter((o) => sameDay(o.date, coachDate) && o.start === time);
   const slotsWithOffers = openSlots.filter((slot) => offersFor(slot.time).length > 0).length;
@@ -2420,7 +2302,7 @@ function DayView(props) {
           {onlyMatched && matchedSlots.length === 0 && <Empty>No open slot today matches anyone's riding times.</Empty>}
           <div className="space-y-2">
             {visibleSlots.map((s, i) => {
-              const matches = eligibleStudentsForSlot(coachDate, s.time, s, props);
+              const matches = eligibleStudentsForSlot({ ...matchingCtx(props), date: coachDate, time: s.time, slot: s });
               const sent = offersFor(s.time);
               const notYetAsked = matches.filter((m) => !m.alreadyOffered);
               // Once offers are out, the slot stops reading as an untouched gap. It's still
@@ -2463,7 +2345,7 @@ function DayView(props) {
 }
 
 function WeekAhead(props) {
-  const { horses, lessonTypes, bookings, students, setCoachDate, navTo, setSelectedBookingId, trainerAvailability, timeOffBlocks, trainerConfig, showOpenSlots } = props;
+  const { horses, lessonTypes, bookings, barnBookings, students, setCoachDate, navTo, setSelectedBookingId, trainerAvailability, timeOffBlocks, trainerConfig, showOpenSlots } = props;
   const days = Array.from({ length: 7 }, (_, i) => addDays(TODAY, i));
   return (
     <div>
@@ -2471,7 +2353,7 @@ function WeekAhead(props) {
       <div className="space-y-4">
         {days.map((d) => {
           const rows = rowsForDate(props, d);
-          const open = showOpenSlots ? findOpenSlots(d, horses, lessonTypes, bookings, students, trainerAvailability, timeOffBlocks, trainerConfig).length : 0;
+          const open = showOpenSlots ? findOpenSlots({ date: d, now: NOW, horses, lessonTypes, bookings: barnBookings, trainerBookings: bookings, students, availability: trainerAvailability, timeOffBlocks, trainerConfig }).length : 0;
           const off = isDateInTimeOff(d, timeOffBlocks);
           return (
             <div key={fmtDate(d)}>
@@ -4360,7 +4242,7 @@ function ProfileSaved(props) {
       <div className="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-3"><Check className="text-green-600" /></div>
       <h2 className="text-lg font-medium mb-1">You're all set, {s.name.split(" ")[0]}!</h2>
       <p className="text-xs text-gray-500 mb-4">Your profile is saved. Next time, just come back and enter your name and phone number.</p>
-      <Btn variant="primary" className="w-full" onClick={() => { setIntroOptions(findIntroOptions(s, horses, lessonTypes, bookings, students, 10, trainerAvailability, timeOffBlocks, trainerConfig)); setStudentScreen("intro-options"); }}>See intro lesson times</Btn>
+      <Btn variant="primary" className="w-full" onClick={() => { setIntroOptions(findIntroOptions({ ...matchingCtx(props), student: s, limit: 10 })); setStudentScreen("intro-options"); }}>See intro lesson times</Btn>
     </div>
   );
 }
@@ -4559,7 +4441,7 @@ function StudentFuture(props) {
               );
             })}
           </div>
-          <Btn className="w-full mb-4" disabled={signing.outstanding} title={signing.outstanding ? "Sign your agreements first" : ""} onClick={() => { setRecurringOptions(findRecurringOptions(s, horses, lessonTypes, bookings, students, 10, trainerAvailability, timeOffBlocks, trainerConfig)); setStudentScreen("add-recurring"); }}>
+          <Btn className="w-full mb-4" disabled={signing.outstanding} title={signing.outstanding ? "Sign your agreements first" : ""} onClick={() => { setRecurringOptions(findRecurringOptions({ ...matchingCtx(props), student: s, limit: 10 })); setStudentScreen("add-recurring"); }}>
             {signing.outstanding ? "Sign your agreements to add lessons" : "+ Add recurring lesson"}
           </Btn>
         </>

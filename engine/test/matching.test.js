@@ -127,6 +127,29 @@ describe("finding open slots", () => {
     const times = open().map((s) => s.time);
     assert.deepEqual([...times].sort(), times);
   });
+
+  // The two lists are the whole reason this function takes two lists, and until these existed
+  // nothing in the suite told them apart — every other test here leaves `trainerBookings`
+  // defaulting to `bookings`, which is precisely the case that cannot detect a confusion
+  // between them. The screens shipped the bug these pin: one list fed to both halves.
+  test("a horse the barn-mate is riding is not offered, though this coach's day is free", () => {
+    // Another trainer in the same account has buttercup at 09:00. It never appears in THIS
+    // coach's bookings, and a horse is one animal however many coaches share it.
+    const barn = [booking({ date: TUE, start: "09:00", horseId: "buttercup" })];
+    const nine = open({ bookings: barn, trainerBookings: [] }).find((s) => s.time === "09:00");
+    assert.ok(!nine || !nine.horseIds.includes("buttercup"),
+      "buttercup is mid-lesson at 09:00, for someone else");
+  });
+
+  test("the barn-mate's lesson does not make this coach look busy", () => {
+    // The converse, and the reason the fix is not simply passing the barn's list to both: the
+    // coach's own day is their own. Another trainer teaching at 09:00 must not close this
+    // coach's 09:00 for every OTHER horse, or one barn's bookings would black out the other's.
+    const barn = [booking({ date: TUE, start: "09:00", horseId: "buttercup" })];
+    const nine = open({ bookings: barn, trainerBookings: [] }).find((s) => s.time === "09:00");
+    assert.ok(nine, "09:00 is still an open window — this coach is not the one teaching");
+    assert.ok(nine.horseIds.length >= 1, "the horses nobody is riding are still offerable");
+  });
 });
 
 describe("who to offer a slot to", () => {
@@ -178,6 +201,15 @@ describe("who to offer a slot to", () => {
   test("an inactive or unapproved profile is never a candidate", () => {
     const shadow = students.map((s) => ({ ...s, profileStatus: "pending_review" }));
     assert.deepEqual(ask({ students: shadow }), []);
+  });
+
+  test("nobody is offered a slot whose only horse the barn-mate is riding", () => {
+    // The same two-list confusion as findOpenSlots, one layer up and quieter: the slot names
+    // buttercup, another trainer has buttercup, and this coach's own list cannot see it. The
+    // candidate rows would each be a real offer sent to a real rider for a horse that is busy.
+    const barn = [booking({ date: TUE, start: "09:00", horseId: "buttercup" })];
+    const rows = ask({ bookings: barn, trainerBookings: [] });
+    assert.deepEqual(rows, [], "buttercup is mid-lesson at 09:00, for someone else");
   });
 
   test("a previous offer for the same slot is flagged, not hidden", () => {
@@ -239,6 +271,26 @@ describe("intro options for a new rider", () => {
     const none = intro({ horizonDays: 0 });
     assert.deepEqual(none, []);
   });
+
+  test("a horse the barn-mate is riding is not offered to a new rider either", () => {
+    // A first lesson is the worst one to have to take back, so the barn's list matters most
+    // here. Every option the unblocked search returns is re-offered from the barn's side with
+    // that exact horse, date and time already taken by the OTHER coach — this coach's own day
+    // stays empty throughout, so only the barn list can rule it out.
+    const clean = intro({ limit: 5 });
+    assert.ok(clean.length, "the fixture must offer something for this test to mean anything");
+
+    for (const o of clean) {
+      const barn = [booking({ date: o.date, start: o.start, horseId: o.horseId })];
+      const out = intro({ bookings: barn, trainerBookings: [], limit: 20 });
+      const stillOffered = out.some(
+        (x) => x.horseId === o.horseId && x.start === o.start &&
+               x.date.toDateString() === o.date.toDateString(),
+      );
+      assert.ok(!stillOffered,
+        `${o.horseId} at ${o.start} on ${o.date.toDateString()} is the barn-mate's, yet was offered`);
+    }
+  });
 });
 
 describe("recurring options", () => {
@@ -275,6 +327,30 @@ describe("recurring options", () => {
     assert.ok(
       !blocked.some((o) => o.day === target.day && o.start === target.start && o.horseId === target.horseId),
       "a pattern whose third week is unbookable must not be offered",
+    );
+  });
+
+  test("a week the barn-mate has the horse breaks the pattern too", () => {
+    // The test above blocks an occurrence through this coach's own list. This one blocks the
+    // same occurrence through the BARN's, with the coach's day left empty — a weekly pattern
+    // is no more bookable because the conflict belongs to someone else's roster, and offering
+    // it commits a rider to a horse that is taken every third week.
+    const open = recurring({ limit: 20 });
+    assert.ok(open.length > 0, "there is something to block");
+    const target = open[0];
+
+    const third = new Date(NOW);
+    while (third.getDay() !== target.day) third.setDate(third.getDate() + 1);
+    third.setDate(third.getDate() + 14);
+
+    const blocked = recurring({
+      limit: 20,
+      bookings: [booking({ date: third, start: target.start, horseId: target.horseId, studentId: "jordan" })],
+      trainerBookings: [],
+    });
+    assert.ok(
+      !blocked.some((o) => o.day === target.day && o.start === target.start && o.horseId === target.horseId),
+      "the horse is the barn's, so the barn's bookings decide whether the pattern holds",
     );
   });
 

@@ -35,7 +35,7 @@ engine/                  The rules and pricing engine. Pure JS, no dependencies.
   matching.js            A layer ABOVE the rules: open slots, who to offer them to, intro and
                          recurring options. Calls into rules; nothing in rules calls back, and
                          test/layering.test.js asserts that stays true.
-  test/                  node --test. 41 tests, no framework, no dependencies.
+  test/                  node --test. No framework, no dependencies.
 db/                      Postgres schema, migrations, and the repository. Drizzle for schema
                          and migration generation; no ORM behaviour beyond query building.
   schema/                Tables as Drizzle declarations. No queries, no tenant ids — nothing
@@ -104,6 +104,20 @@ reverse, and never only in the prototype.** Anything read out of the prototype's
 is the older behavior, and a rule that appears to disagree with `engine/` is the prototype being
 stale rather than a genuine ambiguity. Migrating the prototype to import from `engine/` would
 end this, and is the highest-value cleanup available in this repo.
+
+**`app/src/App.jsx` is one layer further along than `prototype.jsx`.** Its whole matching layer —
+`findOpenSlots`, `eligibleStudentsForSlot`, `findIntroOptions`, `findRecurringOptions`,
+`offerRespectsPreferences`, `coachBusyIntervals`, `potentialLessonTypes`, `defaultLessonType`,
+`windowCovers`, `offerStats` — is now **imported from `engine/matching.js`**, not defined locally.
+What remains duplicated there is the rules layer below it (`validateBooking`, `priceFor`,
+`getEligibleHorses`, `forecastRestStatus` and the rest), so the table above still describes the
+rules sections and the migration is half done, not finished.
+
+The screens speak the engine's argument bag through one helper, `matchingCtx(props)`, which is
+the only place the three renames live: `availability` for the screens' `trainerAvailability`,
+`bookings` for the barn's list, `trainerBookings` for this coach's. Adding a matching call means
+spreading that helper, never rebuilding the mapping inline — seven call sites each getting their
+own chance to confuse the two booking lists is precisely the bug this replaced.
 
 ## The engine's contract
 
@@ -328,12 +342,25 @@ overturned it, rather than only in code.
   and it is what decides the shape of the request layer.
 - **Occurrence generation is still unextracted**, and belongs with the scheduled job that calls
   it rather than with the matching module.
-- **The screens over-offer a shared horse.** `app/src/App.jsx` still uses the prototype's own
-  `findOpenSlots`, which takes ONE booking list — so the Day view offers a horse the barn-mate
-  is riding. Visible today: 1:00 PM reads "Comet, Willow available" while trainer A2 has both.
-  `engine/matching.js` takes `bookings` (the barn, for horses) and `trainerBookings` (this
-  coach, for the coach) precisely for this, and the fix is the migration below rather than a
-  patch to the prototype's copy.
+- ~~**The screens over-offer a shared horse.**~~ **Closed, and the whole matching layer with it.**
+  `app/src/App.jsx` imports all ten functions from `engine/matching.js` rather than defining
+  them, and feeds them both lists through `matchingCtx(props)`: `bookings` is `barnBookings`
+  (the account's, for horses) and `trainerBookings` is this coach's (for their own day). The Day
+  view read 10 open windows where 7 was correct — 12:30, 1:00 and 1:30 PM were entirely phantom,
+  the barn-mate having both horses.
+
+  The same confusion was live one layer up and quieter, which is why the fix did not stop at
+  `findOpenSlots`: `eligibleStudentsForSlot` would have named real riders for a busy horse,
+  `findIntroOptions` would have offered a *first* lesson on one, and `findRecurringOptions`
+  would have committed a rider to a weekly slot taken every third week. All three now ask the
+  barn's list about horses.
+
+  Five tests pin the distinction (`engine/test/matching.test.js`), and they are deliberately
+  complementary: one fails if the trainer's list is used for horses, another if the barn's list
+  is used for the coach. **Every one was mutation-checked** — reverting the engine to the
+  one-list behaviour fails them, so they are known to bite rather than merely to pass. Until
+  they existed nothing in the suite told the two lists apart: every other test there lets
+  `trainerBookings` default to `bookings`, which is exactly the case that cannot detect it.
 - **Writes from the screens are local only.** The app loads real rows and renders them, but its
   handlers still mutate React state rather than calling the API. The endpoints exist and are
   tested (`server/index.js`); nothing is wired to them yet, so a refresh discards changes.
