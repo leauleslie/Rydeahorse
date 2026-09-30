@@ -119,14 +119,21 @@ const handler = (fn) => async (req, res) => {
  * eventually needs to page, it gets its own endpoint then.
  */
 app.get("/api/bootstrap", handler(async ({ repo, req, tenant }) => {
-  const date = toDate(req.query.date ?? new Date().toISOString().slice(0, 10));
-  const [engine, recurring, alerts, notes, offers] = await Promise.all([
-    repo.engineInputsFor(date),
-    repo.recurring.list(),
-    repo.alerts.list(),
-    repo.notes.list(),
-    repo.offers.listOn(req.query.date ?? new Date().toISOString().slice(0, 10)),
-  ]);
+  const isoDate = req.query.date ?? new Date().toISOString().slice(0, 10);
+  const date = toDate(isoDate);
+  // Sequentially, not in parallel. Every one of these runs on the request's single connection
+  // — that is what `withRequest` hands out, and what `SET LOCAL` depends on — and a single
+  // node-postgres client executes its queue in order no matter how many callers are waiting.
+  // `Promise.all` therefore made this no faster while relying on overlapping queries on one
+  // client, which pg@9 removes. See `inSeries` in db/repo/index.js for the same reasoning.
+  //
+  // Unlike the query builders there, `engineInputsFor` is an ordinary async call that starts
+  // the moment it is invoked, so these have to be separate awaits rather than a list.
+  const engine = await repo.engineInputsFor(date);
+  const recurring = await repo.recurring.list();
+  const alerts = await repo.alerts.list();
+  const notes = await repo.notes.list();
+  const offers = await repo.offers.listOn(isoDate);
   return {
     trainer: { id: tenant.trainerId, name: tenant.name, email: tenant.email },
     // The engine shapes ARE the client's shapes — that is what the mapping layer bought.

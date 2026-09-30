@@ -105,6 +105,31 @@ export async function withTenantTransaction(client, { accountId, trainerId }, fn
 }
 
 /**
+ * Await lazily-built queries one at a time, returning their results in order.
+ *
+ * Everything inside a repository call shares ONE connection — `withTenantTransaction` requires
+ * it, because `SET LOCAL` has to land on the same backend as the queries it guards. A single
+ * node-postgres client runs whatever is queued on it strictly in sequence, so `Promise.all`
+ * never bought any concurrency here: it queued fourteen queries at once and they executed
+ * one after another regardless. What it did buy was a deprecation — calling `query()` while
+ * the client is mid-query is removed in pg@9 — so the parallel spelling was a break waiting
+ * for a dependency bump, in exchange for nothing.
+ *
+ * This is safe only because drizzle's builders are lazy: `db.select().from(x)` sends nothing
+ * until it is awaited. The array below is therefore a list of unstarted queries, and awaiting
+ * them in turn issues exactly the same statements in the same order, one in flight at a time.
+ * Hand this eagerly-started promises and it silently becomes `Promise.all` again.
+ *
+ * Making this one round trip instead of fourteen is the real win available here, and it is a
+ * larger change than removing the deprecation — it stays separate.
+ */
+async function inSeries(queries) {
+  const results = [];
+  for (const query of queries) results.push(await query);
+  return results;
+}
+
+/**
  * Bind a repository to one tenant.
  * @param db        drizzle handle
  * @param tenant    { accountId, trainerId }
@@ -262,7 +287,7 @@ export function forTenant(db, { accountId, trainerId, client = null }) {
         availabilityRows, timeOffRows, bandRows, windowRows,
         noRideRows, adjustmentRows, restrictedRows, trainerRows,
         ridingWindowRows, offerRows,
-      ] = await Promise.all([
+      ] = await inSeries([
         db.select().from(horses).where(eq(horses.accountId, accountId)),
         db.select().from(students).where(eq(students.trainerId, trainerId)),
         db.select().from(lessonTypes).where(eq(lessonTypes.trainerId, trainerId)),
