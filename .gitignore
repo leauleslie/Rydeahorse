@@ -5,3 +5,6 @@
 
 node_modules/
 .DS_Store
+
+# Logs written by start.command while the app is running
+.run/
