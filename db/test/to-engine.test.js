@@ -197,4 +197,21 @@ describe("bookings", () => {
     assert.ok(b.date instanceof Date);
     assert.equal(b.date.getDay(), 2);
   });
+
+  test("the series a lesson belongs to survives the mapping", () => {
+    // `derive.js` answers "why does this lesson exist" from `recurringId` alone, so a mapping
+    // that drops it reports every lesson in the database as ad hoc and every recurring screen
+    // as empty — silently, because absent and null are the same answer to `if (!recurringId)`.
+    const row = {
+      id: "b1", studentId: "s1", horseId: "h1", lessonTypeId: "lt1",
+      date: "2026-09-15", startTime: "09:00:00", status: "confirmed", isBillable: true,
+    };
+    assert.equal(
+      toEngineBooking({ ...row, recurringId: "rec1" }).recurringId, "rec1",
+      "a lesson in a standing series must arrive carrying the series id",
+    );
+    // And the other direction, which is what made the bug invisible: a one-off really does
+    // have no series, so `null` here has to mean "booked on its own" rather than "not mapped".
+    assert.equal(toEngineBooking({ ...row, recurringId: null }).recurringId, null);
+  });
 });

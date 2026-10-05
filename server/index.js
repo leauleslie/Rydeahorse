@@ -86,8 +86,24 @@ async function resolveTenant() {
  */
 const handler = (fn) => async (req, res) => {
   try {
-    const tenant = await resolveTenant();
-    const result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
+    let tenant = await resolveTenant();
+    let result;
+    try {
+      result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
+    } catch (err) {
+      // The cached tenant can outlive the row it names. Re-seeding the development database
+      // deletes every trainer and writes new ones, and the cache then points at an id that no
+      // longer resolves — so every request 500s until someone restarts a server that is not
+      // actually broken. Drop the cache and try once more; the second attempt resolves the
+      // coach who exists now.
+      //
+      // This is a property of the STUB above, not of the request layer: once a request carries
+      // its own authenticated identity there is nothing process-wide left to go stale.
+      if (!/no trainer row visible|no trainers in the database/.test(err.message ?? "")) throw err;
+      cachedTenant = null;
+      tenant = await resolveTenant();
+      result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
+    }
     res.json(result ?? { ok: true });
   } catch (err) {
     if (err instanceof BookingRejected) {

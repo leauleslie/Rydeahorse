@@ -133,6 +133,17 @@ export function toEngineLessonType(row, { bandAdjustments = {}, restrictedHorseI
 export function toEngineBooking(row) {
   return {
     id: row.id,
+    // The series this lesson belongs to, or null if it was booked on its own.
+    //
+    // Not cosmetic, and not only a label: `derive.js` reads it for `occurrenceType` (absent
+    // means "adhoc"), for `isRecurringOccurrence`, and for resolving which horse a standing
+    // slot should use. Dropping it here made every lesson in the database read as ad hoc and
+    // every recurring-series screen read as empty, with nothing anywhere throwing.
+    //
+    // It went unnoticed because no booking in `db/test/seed.js` has a `recurring_id` — the
+    // tenancy fixture has no reason to — so the only value this mapping was ever exercised
+    // with was the one that cannot tell a dropped field from a null one.
+    recurringId: row.recurringId ?? null,
     studentId: row.studentId,
     horseId: row.horseId,
     lessonTypeId: row.lessonTypeId,

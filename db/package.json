@@ -14,7 +14,8 @@
     "test:concurrency": "node --test test/concurrency.test.js",
     "test:tenancy": "node --test test/tenancy.test.js",
     "test:migrate": "node test/migrate-test-database.js",
-    "test:parallel": "node --test test/*.test.js"
+    "test:parallel": "node --test test/*.test.js",
+    "seed:demo": "node seed/demo-barn.js"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.6",

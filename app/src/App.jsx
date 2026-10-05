@@ -2394,7 +2394,7 @@ function HorsesList(props) {
                   {h.active && <RestBadge status={rest} />}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mb-1">{h.minExp}+ · {h.styles.join(", ")} · max {h.maxWeight} lbs</p>
+              <p className="text-xs text-gray-500 mb-1">{h.minExp}+ · {h.styles.join(", ")} · {weightLimitLabel(h)}</p>
               <Meter value={cap.used} max={cap.max} />
               <p className="text-xs text-gray-500 mt-1">Today: {cap.used}/{cap.max} min · {cap.label}</p>
             </TapCard>
@@ -2436,7 +2436,7 @@ function HorseDetail(props) {
           <Btn className="w-full" onClick={() => { props.setInactivateHorseId(h.id); navTo("substitution"); }}>Plan coverage</Btn>
         </Card>
       )}
-      <p className="text-xs text-gray-500 mb-1">{h.minExp}+ · {h.styles.join(", ")} · max {h.maxWeight} lbs · {h.restDaysPerWeek} rest day/wk</p>
+      <p className="text-xs text-gray-500 mb-1">{h.minExp}+ · {h.styles.join(", ")} · {weightLimitLabel(h)} · {h.restDaysPerWeek} rest day/wk</p>
       <Meter value={detailCap.used} max={detailCap.max} />
       <p className="text-xs text-gray-500 mt-1 mb-4">Today: {detailCap.used}/{detailCap.max} min · {detailCap.label} · {detailCap.other}</p>
       {h.notes && <Card className="mb-4"><p className="text-xs text-gray-500">Notes</p><p className="text-sm">{h.notes}</p></Card>}
@@ -4763,9 +4763,34 @@ const reviveEach = (rows, ...fields) =>
     return out;
   });
 
+// Caps that mean "no limit" are Infinity in the engine, and `JSON.stringify(Infinity)` is
+// `null`. So "this horse carries no stated weight limit" arrives as "this horse's limit is
+// null" — and the engine's own comparison, `student.weight > h.maxWeight`, reads null as 0.
+// Every rider is then over the limit of a horse that has none, and `getEligibleHorses` quietly
+// drops that horse from every offer and every new booking. Nothing throws; the horse simply
+// stops being suggested.
+//
+// `db/repo/to-engine.js` already warns that mapping these to 0 "would silently ban every rider
+// from an unrestricted horse". JSON does exactly that, one layer further down, which is why the
+// repository being right about it is not enough on its own.
+// "no weight limit" is a sentence; `max Infinity lbs` is a leaked implementation detail, and
+// `max  lbs` — what the same line rendered before the caps were revived — is worse, because it
+// reads as a number the coach forgot to fill in rather than as a horse that carries no limit.
+const weightLimitLabel = (horse) =>
+  Number.isFinite(horse.maxWeight) ? `max ${horse.maxWeight} lbs` : "no weight limit";
+
+const UNCAPPED = ["maxWeight", "maxDailyAdult", "maxDailyOverall"];
+const reviveCaps = (horses) =>
+  (horses ?? []).map((h) => {
+    const out = { ...h };
+    for (const f of UNCAPPED) if (out[f] === null) out[f] = Infinity;
+    return out;
+  });
+
 function reviveBarn(data) {
   return {
     ...data,
+    horses: reviveCaps(data.horses),
     bookings: reviveEach(data.bookings, "date"),
     trainerBookings: reviveEach(data.trainerBookings, "date"),
     offers: reviveEach(data.offers, "date"),
