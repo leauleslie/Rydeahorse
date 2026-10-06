@@ -2045,7 +2045,7 @@ function SheetRouter(props) {
     return (
       <Sheet
         title={isDominant ? "Change dominant horse" : occurrenceType(booking, recurringBookings, lessonTypes) === "recurring" ? "Substitute horse" : "Change horse"}
-        subtitle={isDominant ? "Updates the standing pattern going forward. Occurrences already substituted to another horse are left alone." : `${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · this occurrence only · not saved yet`}
+        subtitle={isDominant ? "Updates the standing pattern going forward. Occurrences already substituted to another horse are left alone." : `${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · this occurrence only · the price doesn't change`}
         onClose={close}
       >
         <div className="space-y-2">
@@ -2058,10 +2058,11 @@ function SheetRouter(props) {
                 // upcoming occurrence's horse against the pattern's own.
                 if (!await props.persist(() => api.updateRecurring(rec.id, { horseId: h.id }, NOW))) return;
               } else {
-                // Substituting ONE occurrence is still local only: `repo.write.bookings` has
-                // create, cancel and settle, and no way to move a booking to another horse.
-                updateBooking(booking.id, { horseId: h.id });
-                if (role === "coach") notifyStudent(booking.studentId, "substitute_horse", `${DAY_NAMES[booking.date.getDay()]} ${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · ${h.name} instead`);
+                // One occurrence only. The pattern is untouched, so `recurring.update` will
+                // later recognise this week as a deliberate exception and leave it alone. The
+                // server writes the rider's alert, and does NOT reprice: a lesson costs what it
+                // costs regardless of which animal turned up.
+                if (!await props.persist(() => api.changeBookingHorse(booking.id, h.id, role === "coach" ? "trainer" : "student"))) return;
               }
               close();
             }} className={`w-full flex justify-between items-center px-3 py-2 rounded text-sm ${h.id === currentId ? "bg-blue-50 border border-blue-300" : "bg-gray-50 hover:bg-gray-100"}`}>
@@ -5066,6 +5067,8 @@ const api = {
   cancelBooking: (id, { now, actor = "trainer" }) =>
     api.send("POST", `/api/bookings/${id}/cancel`, { now: now.toISOString(), actor }),
   settleBooking: (id, outcome) => api.send("POST", `/api/bookings/${id}/settle`, { outcome }),
+  changeBookingHorse: (id, horseId, actor) =>
+    api.send("PATCH", `/api/bookings/${id}/horse`, { horseId, actor }),
   createStudent: (s) => api.send("POST", "/api/students", s),
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),

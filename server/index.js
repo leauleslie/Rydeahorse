@@ -186,6 +186,15 @@ app.post("/api/bookings/:id/cancel", handler(({ repo, req }) =>
     actor: req.body?.actor ?? "trainer",
   })));
 
+// Re-horsing one lesson. A PATCH on the booking rather than a new verb, because that is all
+// it is: one column, no reprice, no change to the pattern it may belong to.
+app.patch("/api/bookings/:id/horse", handler(({ repo, req }) =>
+  repo.write.bookings.changeHorse({
+    bookingId: req.params.id,
+    horseId: req.body.horseId,
+    actor: req.body?.actor ?? "trainer",
+  })));
+
 app.post("/api/bookings/:id/settle", handler(({ repo, req }) =>
   repo.write.bookings.settle({ bookingId: req.params.id, outcome: req.body.outcome })));
 

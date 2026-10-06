@@ -373,6 +373,83 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
         return { booking: updated, disposition };
       },
 
+      /**
+       * Move ONE lesson onto a different horse, leaving everything else about it alone.
+       *
+       * The one-off against a standing slot: "Rocket this Tuesday, Duke is lame." It changes
+       * nothing about the pattern, which is why `recurring.update` then recognises this
+       * occurrence as deliberate and leaves it where it is.
+       *
+       * THE PRICE DOES NOT CHANGE, and that is not an oversight. A price is set by the student,
+       * the lesson type and the slot — never by which animal turned up — so there is nothing to
+       * recompute, and recomputing anyway would re-stamp a receipt the schema exists to keep
+       * still. The horse moves; the five components do not.
+       *
+       * The booking's own row is excluded from the world it is validated against. It occupies
+       * the very slot being re-horsed, so leaving it in means every swap fails `trainer_free`
+       * against itself — which is exactly what `validateSwap` does on the client, and the two
+       * have to agree or the screen offers horses the server then refuses.
+       */
+      async changeHorse({ bookingId, horseId, actor = "trainer" }) {
+        await assertInTenantTransaction(client, tenant);
+        const [row] = await db.select().from(bookings)
+          .where(and(eq(bookings.trainerId, trainerId), eq(bookings.id, bookingId)));
+        if (!row) throw new Error(`no booking ${bookingId} visible to this trainer`);
+        if (!["pending", "confirmed"].includes(row.status)) {
+          // A lesson that is over, or cancelled, is a record of what happened. Re-horsing it
+          // would rewrite history rather than change a plan.
+          throw new Error(
+            `booking ${bookingId} is ${row.status}, so the horse it ran with cannot be changed`,
+          );
+        }
+        if (row.horseId === horseId) return { booking: row, unchanged: true };
+
+        const date = toDate(row.date);
+        await lockTrainerDay(client, trainerId, asDateString(date));
+
+        const ctx = await engineInputsFor(date);
+        const student = ctx.students.find((s) => s.id === row.studentId);
+        const horse = ctx.horses.find((h) => h.id === horseId);
+        const lessonType = ctx.lessonTypes.find((l) => l.id === row.lessonTypeId);
+        if (!student) throw new Error(`no student ${row.studentId} visible to this trainer`);
+        if (!horse) throw new Error(`no horse ${horseId} visible to this account`);
+        if (!lessonType) throw new Error(`no lesson type ${row.lessonTypeId} visible to this trainer`);
+
+        const without = (list) => (list || []).filter((b) => b.id !== bookingId);
+        const validation = validateBooking({
+          ...ctx,
+          bookings: without(ctx.bookings),
+          trainerBookings: without(ctx.trainerBookings),
+          student, horse, lessonType,
+          date, start: toHHMM(row.startTime),
+          offerDiscount: row.offerDiscount,
+          manualAdjustment: row.manualAdjustment,
+        });
+        if (!validation.ok) throw new BookingRejected(validation.checks, { date: row.date });
+
+        try {
+          const [updated] = await db.update(bookings)
+            .set({ horseId, updatedAt: sql`now()` })
+            .where(and(eq(bookings.trainerId, trainerId), eq(bookings.id, bookingId)))
+            .returning();
+
+          if (actor !== "student") {
+            await db.insert(studentAlerts).values({
+              studentId: row.studentId,
+              kind: "substitute_horse",
+              detail: `Your ${row.date} ${toHHMM(row.startTime)} lesson is on ${horse.name} ` +
+                      `this time. Same lesson, same price.`,
+            });
+          }
+          return { booking: updated, horse: horse.name };
+        } catch (err) {
+          const pg = pgErrorOf(err);
+          if (pg?.code === "23P01") throw new SlotTaken(pg.constraint);
+          if (pg?.code === "55P03") throw new BookingBusy(LOCK_TIMEOUT_SECONDS);
+          throw err;
+        }
+      },
+
       /** Mark a lesson completed or a no-show. Both are billable; neither holds the slot. */
       async settle({ bookingId, outcome }) {
         await assertInTenantTransaction(client, tenant);

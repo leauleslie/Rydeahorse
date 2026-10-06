@@ -400,6 +400,98 @@ describe("concurrency", () => {
   });
 });
 
+describe("substituting the horse on one lesson", () => {
+  const book = (over = {}) =>
+    asA1(() => repo.write.bookings.create({
+      studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1],
+      date: DATE, start: FREE, ...over,
+    }));
+
+  test("the horse moves and the receipt does not", async () => {
+    // A price is set by the student, the lesson type and the slot — never by which animal
+    // turned up. Re-stamping it here would be the one thing the stored receipt exists to stop.
+    const { booking } = await book();
+    const { booking: moved } = await asA1(() =>
+      repo.write.bookings.changeHorse({ bookingId: booking.id, horseId: alder.horses[1] }));
+
+    assert.equal(moved.horseId, alder.horses[1]);
+    assert.equal(moved.basePrice, booking.basePrice);
+    assert.equal(moved.bandAdjustment, booking.bandAdjustment);
+    assert.equal(moved.price, booking.price, "same lesson, same price, different horse");
+    assert.equal(moved.startTime, booking.startTime, "and the same slot");
+  });
+
+  test("the lesson's own row does not block its own swap", async () => {
+    // The booking occupies the very slot being re-horsed. Leaving it in the world the engine
+    // validates against makes every swap fail trainer_free against itself — which would reject
+    // a move the client's own validateSwap had just offered.
+    const { booking } = await book();
+    await assert.doesNotReject(asA1(() =>
+      repo.write.bookings.changeHorse({ bookingId: booking.id, horseId: alder.horses[1] })));
+  });
+
+  test("a horse that is not free that hour is refused, with the checks", async () => {
+    const { booking } = await book();
+    // The barn-mate takes the other horse at the same time. Horses are account-scoped, so this
+    // genuinely removes it from reach.
+    const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };
+    const repoA2 = forTenant(db, { ...tenantA2, client });
+    await withTenantTransaction(client, tenantA2, () => repoA2.write.bookings.create({
+      studentId: a2.students[0], horseId: alder.horses[1], lessonTypeId: a2.lessonTypes[1],
+      date: DATE, start: FREE,
+    }));
+
+    await assert.rejects(
+      asA1(() => repo.write.bookings.changeHorse({ bookingId: booking.id, horseId: alder.horses[1] })),
+      (err) => {
+        assert.ok(err instanceof BookingRejected);
+        assert.ok(err.failed.includes("horse_free"), `expected horse_free, got ${err.failed}`);
+        return true;
+      },
+    );
+    const { rows } = await client.query("select horse_id from bookings where id = $1", [booking.id]);
+    assert.equal(rows[0].horse_id, alder.horses[0], "a refused swap leaves the lesson alone");
+  });
+
+  test("a lesson that is over cannot be re-horsed", async () => {
+    // Not a plan any more, a record of what happened. Changing it would rewrite history.
+    const { booking } = await book();
+    await asA1(() => repo.write.bookings.settle({ bookingId: booking.id, outcome: "completed" }));
+    await assert.rejects(
+      asA1(() => repo.write.bookings.changeHorse({ bookingId: booking.id, horseId: alder.horses[1] })),
+      /is completed, so the horse it ran with cannot be changed/,
+    );
+  });
+
+  test("the rider is told, and is not told about their own request", async () => {
+    const { booking } = await book();
+    const before = await alertCount(a1.students[0], "substitute_horse");
+    await asA1(() => repo.write.bookings.changeHorse({
+      bookingId: booking.id, horseId: alder.horses[1], actor: "student",
+    }));
+    assert.equal(
+      await alertCount(a1.students[0], "substitute_horse"), before,
+      "a student must not be alerted about a change they made themselves",
+    );
+
+    await asA1(() => repo.write.bookings.changeHorse({
+      bookingId: booking.id, horseId: alder.horses[0], actor: "trainer",
+    }));
+    assert.equal(await alertCount(a1.students[0], "substitute_horse"), before + 1);
+  });
+
+  test("another trainer's lesson cannot be re-horsed", async () => {
+    const { booking } = await book();
+    const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };
+    const repoA2 = forTenant(db, { ...tenantA2, client });
+    await assert.rejects(
+      withTenantTransaction(client, tenantA2, () =>
+        repoA2.write.bookings.changeHorse({ bookingId: booking.id, horseId: alder.horses[1] })),
+      /no booking .* visible to this trainer/,
+    );
+  });
+});
+
 describe("standing weekly slots", () => {
   // The fixture's trainer A1 teaches Tuesdays 09:00–17:00, and 11:00 is free for both the horse
   // and the coach — so a Tuesday pattern at 11:00 is the one that should succeed, and anything
