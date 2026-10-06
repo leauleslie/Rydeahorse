@@ -2182,7 +2182,26 @@ function SheetRouter(props) {
 
   if (sheet.type === "notify") {
     const { date, time, slot } = sheet.ctx;
-    return <NotifySheet date={date} time={time} priceBands={priceBands} trainerConfig={trainerConfig} candidates={eligibleStudentsForSlot({ ...matchingCtx(props), date, time, slot })} onSend={(picked, discount, reason) => { picked.forEach((c, i) => logOffer(c.student.id, date, time, c.horse.id, c.kind, c.lessonType.id, i + 1, c.kind === "potential" ? discount : 0, c.kind === "potential" ? reason : "")); close(); }} onClose={close} />;
+    return <NotifySheet date={date} time={time} priceBands={priceBands} trainerConfig={trainerConfig} candidates={eligibleStudentsForSlot({ ...matchingCtx(props), date, time, slot })} onSend={async (picked, discount, reason) => {
+      // All of them, then ONE refetch — `persist` reloads the barn after the callback returns,
+      // so sending five offers costs five writes and one read rather than five of each. The
+      // discount only applies to a potential-window match: a target offer is full price, and
+      // that distinction is the whole reason the two kinds exist.
+      const ok = await props.persist(async () => {
+        for (const [i, c] of picked.entries()) {
+          await api.logOffer({
+            // isoDateOf, not the Date: JSON turns a Date into a UTC instant, and local midnight
+            // on the 15th is the 14th in UTC anywhere east of Greenwich — the offer would be
+            // recorded against the wrong day and never match the booking that accepts it.
+            studentId: c.student.id, date: isoDateOf(date), start: time, horseId: c.horse.id,
+            lessonTypeId: c.lessonType.id, kind: c.kind, rank: i + 1,
+            offerDiscount: c.kind === "potential" ? discount : 0,
+            offerReason: c.kind === "potential" ? reason : "",
+          });
+        }
+      });
+      if (ok) close();
+    }} onClose={close} />;
   }
 
   if (sheet.type === "recurring-slot") {
@@ -2585,7 +2604,7 @@ function HorseDetail(props) {
 }
 
 function HorseForm(props) {
-  const { horseFormId, horses, setHorses, goBack, setSelectedHorseId, setCoachScreen } = props;
+  const { horseFormId, horses, setHorses, goBack, setSelectedHorseId, setCoachScreen, persist, busy } = props;
   const existing = horses.find((h) => h.id === horseFormId);
   const [form, setForm] = useState(existing || { name: "", minExp: "beginner", adultOnly: false, styles: [], maxWeight: 180, restDaysPerWeek: 1, maxDailyAdult: 120, maxDailyOverall: 180, active: true, notes: "" });
   const patch = (p) => setForm({ ...form, ...p });
@@ -2613,10 +2632,19 @@ function HorseForm(props) {
       </div>
       {form.maxDailyAdult > form.maxDailyOverall && <p className="text-xs text-red-700 mb-2">The adult cap can't be higher than the overall cap.</p>}
       <Field label="Notes" className="mb-4"><textarea value={form.notes} onChange={(e) => patch({ notes: e.target.value })} className="w-full" rows={2} /></Field>
-      <Btn variant="primary" className="w-full" disabled={!valid} onClick={() => {
-        if (existing) { setHorses((prev) => prev.map((h) => (h.id === existing.id ? { ...h, ...form } : h))); goBack(); }
-        else { const id = uid("hor"); setHorses((prev) => [...prev, { ...form, id }]); setSelectedHorseId(id); setCoachScreen("horse-detail"); }
-      }}>{existing ? "Save horse" : "Add horse"}</Btn>
+      <Btn variant="primary" className="w-full" disabled={!valid || busy} onClick={async () => {
+        if (existing) {
+          if (await persist(() => api.updateHorse(existing.id, form))) goBack();
+          return;
+        }
+        // The new row's id comes back from the database rather than being invented here: the
+        // screen navigates straight to it, and a local `uid()` would point at a horse that
+        // never existed once the refetch replaced it with the real one.
+        const created = await persist(() => api.createHorse(form));
+        if (!created) return;
+        setSelectedHorseId(created.id);
+        setCoachScreen("horse-detail");
+      }}>{busy ? "Saving…" : existing ? "Save horse" : "Add horse"}</Btn>
     </div>
   );
 }
@@ -5072,6 +5100,9 @@ const api = {
   createStudent: (s) => api.send("POST", "/api/students", s),
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
+  createHorse: (h) => api.send("POST", "/api/horses", h),
+  updateHorse: (id, patch) => api.send("PATCH", `/api/horses/${id}`, patch),
+  logOffer: (o) => api.send("POST", "/api/offers", o),
   createRecurring: (r) => api.send("POST", "/api/recurring", r),
   updateRecurring: (id, patch, now) =>
     api.send("PATCH", `/api/recurring/${id}`, { ...patch, now: now.toISOString() }),

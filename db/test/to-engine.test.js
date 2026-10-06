@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import {
   toDate, toHHMM, toEngineHorse, toEngineStudent, toEngineLessonType,
   toEngineBooking, toEngineAvailability, toEngineTimeOff, toEnginePriceBands,
-  toEngineTrainerConfig,
+  toEngineTrainerConfig, fromEngineHorse, fromEngineStudentPatch, fromEngineAvailability,
 } from "../repo/to-engine.js";
 
 describe("dates", () => {
@@ -207,6 +207,57 @@ describe("trainer config", () => {
     const c = toEngineTrainerConfig({ frequencyTier1MinRides: 8, frequencyTier2MinRides: 12, minBufferMin: 15, lateCancelHours: 24 });
     assert.equal(c.freqTier1MinRides, 8);
     assert.equal(c.freqTier2MinRides, 12);
+  });
+});
+
+describe("what the screens send back", () => {
+  test("an uncapped horse is written as NO limit, never as a limit of zero", () => {
+    // The round trip that matters: the repository maps a null cap to Infinity on the way out,
+    // JSON turns Infinity into null, the screens turn null back into Infinity — and this turns
+    // it back into null. Writing 0 at any point in that loop bans every rider from a horse that
+    // carries no stated limit, silently, because the comparison is `weight > cap`.
+    const out = fromEngineHorse({
+      name: "Vesper", maxWeight: Infinity, maxDailyAdult: Infinity, maxDailyOverall: 150,
+    });
+    assert.equal(out.maxRiderWeightLbs, null, "no weight limit, not a limit of zero");
+    assert.equal(out.maxDailyMinutesAdult, null);
+    assert.equal(out.maxDailyMinutesOverall, 150, "a real cap is still a real cap");
+    assert.equal(out.name, "Vesper");
+  });
+
+  test("a real cap of zero is not confused with no cap", () => {
+    // 0 is finite, so it is a limit the coach set. Only a non-finite value means "none".
+    assert.equal(fromEngineHorse({ maxWeight: 0 }).maxRiderWeightLbs, 0);
+  });
+
+  test("engine names become column names, and unknown fields are dropped", () => {
+    const out = fromEngineHorse({ minExp: "advanced", styles: ["English"], nonsense: 1 });
+    assert.equal(out.minExperienceLevel, "advanced");
+    assert.deepEqual(out.ridingStyles, ["English"]);
+    assert.equal("nonsense" in out, false, "a whitelist, so a stray field cannot reach a column");
+  });
+
+  test("a student patch cannot carry a rider to another coach", () => {
+    // The outer of two fences — writes.js deletes trainerId defensively as well. Forwarding
+    // whatever arrived would be a tenancy hole with a friendly signature.
+    const out = fromEngineStudentPatch({ name: "Alex", trainerId: "someone-else", profileStatus: "approved" });
+    assert.equal(out.name, "Alex");
+    assert.equal(out.profileStatus, "approved");
+    assert.equal("trainerId" in out, false);
+  });
+
+  test("the screens' recurringUnlocked is the column's recurring_potential_unlocked", () => {
+    assert.equal(fromEngineStudentPatch({ recurringUnlocked: true }).recurringPotentialUnlocked, true);
+  });
+
+  test("availability goes back out as the enum it is stored as", () => {
+    // `day` is a Date#getDay() index on the screens and a day_of_week enum in the column. The
+    // same translation toEngineAvailability does, in reverse, and the one that puts a Sunday
+    // window on a Monday if it is skipped.
+    const [w] = fromEngineAvailability([{ day: 2, start: "09:00", end: "17:00" }]);
+    assert.equal(w.dayOfWeek, "tue");
+    assert.equal(w.startTime, "09:00");
+    assert.equal(w.endTime, "17:00");
   });
 });
 

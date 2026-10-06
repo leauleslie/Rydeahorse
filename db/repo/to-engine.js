@@ -369,4 +369,59 @@ export function fromEngineAvailability(windows) {
   }));
 }
 
+/** Engine field -> column, for the fields the Horses screen edits. */
+const HORSE_FIELDS = {
+  name: "name",
+  minExp: "minExperienceLevel",
+  adultOnly: "adultOnly",
+  styles: "ridingStyles",
+  maxWeight: "maxRiderWeightLbs",
+  restDaysPerWeek: "restDaysPerWeek",
+  maxDailyAdult: "maxDailyMinutesAdult",
+  maxDailyOverall: "maxDailyMinutesOverall",
+  active: "active",
+  notes: "notes",
+};
+
+// The caps that mean "no limit". Infinity on the way out, null in the column — and `null` is
+// also what JSON.stringify makes of Infinity, so a value arriving over HTTP is already the
+// right shape and a value passed in-process is not. Normalising both here is what stops a
+// horse with no weight limit being written back with a limit of zero.
+const UNCAPPED_HORSE_FIELDS = new Set(["maxWeight", "maxDailyAdult", "maxDailyOverall"]);
+
+export function fromEngineHorse(patch) {
+  const out = {};
+  for (const [from, column] of Object.entries(HORSE_FIELDS)) {
+    if (patch[from] === undefined) continue;
+    const value = patch[from];
+    out[column] = UNCAPPED_HORSE_FIELDS.has(from) && !Number.isFinite(value) ? null : value;
+  }
+  return out;
+}
+
+/**
+ * An offer the coach has just made -> the row that records it.
+ *
+ * The discount and its reason are captured at the moment of the offer and travel with it,
+ * because a discount whose reason is not written down when it is given gets reconstructed
+ * later, badly.
+ */
+export function fromEngineOffer(offer) {
+  return {
+    studentId: offer.studentId,
+    horseId: offer.horseId,
+    lessonTypeId: offer.lessonTypeId,
+    date: typeof offer.date === "string" ? offer.date : asDateOnly(offer.date),
+    startTime: offer.start ?? offer.startTime,
+    kind: offer.kind,
+    offerDiscount: offer.offerDiscount ?? null,
+    offerReason: offer.offerReason || null,
+    rank: offer.rank ?? null,
+  };
+}
+
+// Local components, not toISOString — the same trap `toDate` guards on the way in.
+const asDateOnly = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 export const _internals = { DOW_INDEX, DOW_NAME };

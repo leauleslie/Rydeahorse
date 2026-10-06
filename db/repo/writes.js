@@ -21,7 +21,7 @@
 //                                  coach owns the schedule.
 import { eq, and, inArray, sql } from "drizzle-orm";
 import {
-  bookings, students, studentAlerts, trainerAvailability, recurringBookings,
+  bookings, students, studentAlerts, trainerAvailability, recurringBookings, horses, offers,
 } from "../schema/index.js";
 import { validateBooking, priceFor, cancelDisposition, parseTime, minToStr } from "../../engine/index.js";
 import { toEngineBooking, toDate, toHHMM, DOW_NAME } from "./to-engine.js";
@@ -723,6 +723,107 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
         });
 
         return { recurring: updated, removed: removed.length };
+      },
+    },
+
+    horses: {
+      /**
+       * Add a horse to the BARN, not to a coach.
+       *
+       * Account-scoped, and that is the whole difference from every other write here: a horse
+       * is a physical animal at a facility, its rest days and saddle-time cap are facts about
+       * the animal, and both coaches who ride it share them. So `accountId` is stamped and
+       * `trainerId` never appears — a horse added by one coach is immediately the other's too,
+       * which is correct and is what the RLS policy on this table already assumes.
+       */
+      async create(values) {
+        await assertInTenantTransaction(client, tenant);
+        const [row] = await db.insert(horses).values({ ...values, accountId }).returning();
+        return row;
+      },
+
+      /**
+       * Change a horse. Deactivating is this, with `active: false` — there is no delete.
+       *
+       * Nothing in the render path survives a horse disappearing: every `horses.find(...).name`
+       * becomes a white screen on the day one is deleted, and the lessons it already taught
+       * would lose the animal they name. Deactivating keeps the row and takes it out of
+       * circulation, which is what `horse_active` in the engine reads.
+       */
+      async update({ horseId, ...values }) {
+        await assertInTenantTransaction(client, tenant);
+        // Never from the caller. Moving a horse between barns is not an edit, and accepting it
+        // here would hand one account's animal to another with a friendly signature.
+        delete values.accountId;
+        const [row] = await db.update(horses)
+          .set({ ...values, updatedAt: sql`now()` })
+          .where(and(eq(horses.accountId, accountId), eq(horses.id, horseId)))
+          .returning();
+        if (!row) throw new Error(`no horse ${horseId} visible to this account`);
+        return row;
+      },
+    },
+
+    offers: {
+      /**
+       * Record that a slot was offered to a rider.
+       *
+       * Offers are how `offerStats` derives who tends to say yes, which is what ranks the next
+       * gap-fill — so an offer that is sent and not written down makes the ranking worse every
+       * time. Acceptance is never stored: it is derived from a booking that matches the offer's
+       * student, date and time, because Phase 1a has no reply channel and a stored "accepted"
+       * would be a guess.
+       *
+       * `offers_one_per_student_slot` means offering the same rider the same slot twice is a
+       * conflict rather than a second row. The screen already flags an existing offer instead of
+       * hiding it — the coach decides whether to ask again — so this reports the clash plainly
+       * rather than quietly overwriting what was offered the first time.
+       */
+      async create(values) {
+        await assertInTenantTransaction(client, tenant);
+        try {
+          const [row] = await db.insert(offers).values({ ...values, trainerId }).returning();
+
+          // BOTH figures, always. A discounted price shown on its own reads as the new price and
+          // sets the expectation that next week is the same; the pair is what makes it legible
+          // as a one-off. That is why the discount and its reason are captured here rather than
+          // reconstructed later — see "Pricing is three separate mechanisms" in CLAUDE.md.
+          const date = toDate(values.date);
+          const ctx = await engineInputsFor(date);
+          const student = ctx.students.find((s) => s.id === values.studentId);
+          const lessonType = ctx.lessonTypes.find((l) => l.id === values.lessonTypeId);
+          const horse = ctx.horses.find((h) => h.id === values.horseId);
+          let priceNote = "";
+          if (student && lessonType) {
+            const quote = (offerDiscount) => priceFor({
+              student, lessonType, date, start: values.startTime, offerDiscount,
+              priceBands: ctx.priceBands, trainerConfig: ctx.trainerConfig,
+            }).price;
+            const full = quote(0);
+            const offered = quote(values.offerDiscount ?? 0);
+            priceNote = offered < full
+              ? ` · $${offered} instead of the usual $${full}` +
+                (values.offerReason ? `, ${values.offerReason}` : "")
+              : ` · $${offered}`;
+          }
+
+          await db.insert(studentAlerts).values({
+            studentId: values.studentId,
+            kind: "offer",
+            detail: `${values.date} at ${toHHMM(values.startTime)}` +
+                    `${horse ? ` with ${horse.name}` : ""}${priceNote}`,
+          });
+          return row;
+        } catch (err) {
+          const pg = pgErrorOf(err);
+          if (pg?.code === "23505") {
+            throw new Error(
+              `that rider has already been offered ${values.date} at ${values.startTime}. ` +
+                `The first offer stands, with the discount and reason it was made on.`,
+            );
+          }
+          throw err;
+        }
       },
     },
 

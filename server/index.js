@@ -16,6 +16,7 @@ import { forTenant } from "../db/repo/index.js";
 import { BookingRejected, SlotTaken, BookingBusy } from "../db/repo/writes.js";
 import {
   toDate, toEngineRecurring, fromEngineStudentPatch, fromEngineAvailability,
+  fromEngineHorse, fromEngineOffer,
 } from "../db/repo/to-engine.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -213,6 +214,18 @@ app.put("/api/availability", handler(({ repo, req }) =>
 
 // A standing weekly slot and the occurrences it generates, created or ended as one unit. The
 // screens send `day` as a Date#getDay() index, which is what they hold; the repository maps it.
+// Horses are ACCOUNT-scoped, so these take no trainer: a horse added by one coach belongs to
+// the barn, and is immediately the other coach's too.
+app.post("/api/horses", handler(({ repo, req }) =>
+  repo.write.horses.create(fromEngineHorse(req.body))));
+
+app.patch("/api/horses/:id", handler(({ repo, req }) =>
+  repo.write.horses.update({ horseId: req.params.id, ...fromEngineHorse(req.body) })));
+
+// Recording an offer, which is what later tells `offerStats` who tends to say yes.
+app.post("/api/offers", handler(({ repo, req }) =>
+  repo.write.offers.create(fromEngineOffer(req.body))));
+
 app.post("/api/recurring", handler(({ repo, req }) =>
   repo.write.recurring.create(req.body)));
 

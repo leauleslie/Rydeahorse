@@ -400,6 +400,87 @@ describe("concurrency", () => {
   });
 });
 
+describe("the barn's horses", () => {
+  test("a horse added by one coach belongs to the other too", async () => {
+    // Account-scoped, not trainer-scoped: a horse is a physical animal at a facility, and the
+    // coach who adds it does not own it.
+    const created = await asA1(() => repo.write.horses.create({
+      name: "Juniper", minExperienceLevel: "beginner", ridingStyles: ["English"],
+      restDaysPerWeek: 1, maxDailyMinutesOverall: 180,
+    }));
+    const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };
+    const repoA2 = forTenant(db, { ...tenantA2, client });
+    const seen = await withTenantTransaction(client, tenantA2, () => repoA2.horses.list());
+    assert.ok(
+      seen.some((h) => h.id === created.id),
+      "the barn-mate sees it immediately, with no sharing step",
+    );
+  });
+
+  test("a horse in another barn cannot be edited", async () => {
+    const theirs = birch.horses[0];
+    await assert.rejects(
+      asA1(() => repo.write.horses.update({ horseId: theirs, name: "Renamed" })),
+      /no horse .* visible to this account/,
+    );
+  });
+
+  test("deactivating keeps the row, because every lookup in the render path depends on it", async () => {
+    const horseId = alder.horses[0];
+    const row = await asA1(() => repo.write.horses.update({ horseId, active: false }));
+    assert.equal(row.active, false);
+    assert.equal(row.name, "Comet", "the horse is still there, and still named");
+
+    const { rows } = await client.query(
+      "select count(*)::int n from bookings where horse_id = $1", [horseId]);
+    assert.ok(rows[0].n > 0, "and the lessons it already taught still point at it");
+  });
+
+  test("an uncapped weight limit survives the round trip as no limit", async () => {
+    // Infinity in the engine, null in the column. Writing 0 instead would ban every rider from
+    // a horse that carries no stated limit — the failure `to-engine` warns about, in reverse.
+    const created = await asA1(() => repo.write.horses.create({
+      name: "Vesper", minExperienceLevel: "advanced", ridingStyles: ["English"],
+      maxRiderWeightLbs: null, restDaysPerWeek: 2,
+    }));
+    assert.equal(created.maxRiderWeightLbs, null);
+  });
+});
+
+describe("recording an offer", () => {
+  const offer = (over = {}) => asA1(() => repo.write.offers.create({
+    studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1],
+    date: SHARED_DATE, startTime: "13:00", kind: "target", rank: 1, ...over,
+  }));
+
+  test("an offer is recorded, and the rider is told both prices", async () => {
+    const row = await offer({ kind: "potential", offerDiscount: 10, offerReason: "filling a gap" });
+    assert.equal(row.offerDiscount, 10);
+    assert.equal(row.offerReason, "filling a gap");
+
+    const { rows } = await client.query(
+      "select detail from student_alerts where student_id = $1 and kind = 'offer'",
+      [a1.students[0]]);
+    assert.equal(rows.length, 1);
+    // A discounted price alone reads as the new price; the pair is what makes it a one-off.
+    assert.match(rows[0].detail, /instead of the usual/);
+    assert.match(rows[0].detail, /filling a gap/);
+  });
+
+  test("a full-price offer says one price, not a saving that isn't there", async () => {
+    await offer();
+    const { rows } = await client.query(
+      "select detail from student_alerts where student_id = $1 and kind = 'offer'",
+      [a1.students[0]]);
+    assert.doesNotMatch(rows[0].detail, /instead of the usual/);
+  });
+
+  test("the same rider cannot be offered the same slot twice", async () => {
+    await offer();
+    await assert.rejects(offer(), /already been offered/);
+  });
+});
+
 describe("substituting the horse on one lesson", () => {
   const book = (over = {}) =>
     asA1(() => repo.write.bookings.create({
