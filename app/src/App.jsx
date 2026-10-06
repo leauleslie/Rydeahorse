@@ -2045,19 +2045,21 @@ function SheetRouter(props) {
     return (
       <Sheet
         title={isDominant ? "Change dominant horse" : occurrenceType(booking, recurringBookings, lessonTypes) === "recurring" ? "Substitute horse" : "Change horse"}
-        subtitle={isDominant ? "Updates the standing pattern going forward. Occurrences already substituted to another horse are left alone." : `${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · this occurrence only`}
+        subtitle={isDominant ? "Updates the standing pattern going forward. Occurrences already substituted to another horse are left alone." : `${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · this occurrence only · not saved yet`}
         onClose={close}
       >
         <div className="space-y-2">
           {ok.length === 0 && <Empty>No horse clears every check for this slot. Move the lesson, or adjust the horse's caps in Horses.</Empty>}
           {ok.map(({ horse: h }) => (
-            <button key={h.id} onClick={() => {
+            <button key={h.id} disabled={props.busy} onClick={async () => {
               if (isDominant && rec) {
-                const oldId = rec.horseId;
-                setRecurringBookings((prev) => prev.map((r) => (r.id === rec.id ? { ...r, horseId: h.id } : r)));
-                setBookings((prev) => prev.map((bk) => (bk.recurringId === rec.id && bk.date >= TODAY && bk.horseId === oldId ? { ...bk, horseId: h.id } : bk)));
-                if (role === "coach") notifyStudent(booking.studentId, "recurring_changed", `${DAY_NAMES[rec.day]}s ${timeStr(parseTime(rec.start))} · now with ${h.name}`);
+                // Changes the pattern from today forward. Weeks already moved onto a different
+                // horse by hand are left alone — the server decides that, by comparing each
+                // upcoming occurrence's horse against the pattern's own.
+                if (!await props.persist(() => api.updateRecurring(rec.id, { horseId: h.id }, NOW))) return;
               } else {
+                // Substituting ONE occurrence is still local only: `repo.write.bookings` has
+                // create, cancel and settle, and no way to move a booking to another horse.
                 updateBooking(booking.id, { horseId: h.id });
                 if (role === "coach") notifyStudent(booking.studentId, "substitute_horse", `${DAY_NAMES[booking.date.getDay()]} ${fmtDate(booking.date)} ${timeStr(parseTime(booking.start))} · ${h.name} instead`);
               }
@@ -2202,7 +2204,12 @@ function SheetRouter(props) {
         <div className="space-y-2">
           {shown.length === 0 && <Empty>{horseOnly ? "No other horse clears every check at this day and time." : "No other weekly slot clears every check right now."}</Empty>}
           {shown.map((o, i) => (
-            <button key={i} onClick={() => { applyRecurringChange(rec.id, { day: o.day, start: o.start, horseId: o.horseId }); if (role === "coach") notifyStudent(rec.studentId, "recurring_changed", `Now ${DAY_NAMES[o.day]}s ${timeStr(parseTime(o.start))} with ${horses.find((h) => h.id === o.horseId).name}`); close(); }} className="w-full flex justify-between items-center px-3 py-2 rounded text-sm bg-gray-50 hover:bg-gray-100">
+            <button key={i} disabled={props.busy} onClick={async () => {
+              // Past weeks keep the horse and time they actually had; the server re-plans only
+              // what is still to come, and writes the rider's alert itself.
+              if (!await props.persist(() => api.updateRecurring(rec.id, { day: o.day, start: o.start, horseId: o.horseId }, NOW))) return;
+              close();
+            }} className="w-full flex justify-between items-center px-3 py-2 rounded text-sm bg-gray-50 hover:bg-gray-100 disabled:opacity-50">
               <span>{DAY_NAMES[o.day]}s, {timeStr(parseTime(o.start))}</span>
               <span className="text-gray-600">{horses.find((h) => h.id === o.horseId).name}</span>
             </button>
@@ -5063,6 +5070,8 @@ const api = {
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
   createRecurring: (r) => api.send("POST", "/api/recurring", r),
+  updateRecurring: (id, patch, now) =>
+    api.send("PATCH", `/api/recurring/${id}`, { ...patch, now: now.toISOString() }),
   endRecurring: (id, now) => api.send("POST", `/api/recurring/${id}/end`, { now: now.toISOString() }),
 };
 

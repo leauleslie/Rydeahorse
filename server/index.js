@@ -207,6 +207,15 @@ app.put("/api/availability", handler(({ repo, req }) =>
 app.post("/api/recurring", handler(({ repo, req }) =>
   repo.write.recurring.create(req.body)));
 
+// Changing a standing slot is a PATCH on the pattern, not a write per occurrence: the
+// repository decides which weeks that touches.
+app.patch("/api/recurring/:id", handler(({ repo, req }) =>
+  repo.write.recurring.update({
+    recurringId: req.params.id,
+    ...req.body,
+    now: req.body?.now ? new Date(req.body.now) : new Date(),
+  })));
+
 app.post("/api/recurring/:id/end", handler(({ repo, req }) =>
   repo.write.recurring.end({
     recurringId: req.params.id,

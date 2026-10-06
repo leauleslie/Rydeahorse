@@ -492,6 +492,107 @@ describe("standing weekly slots", () => {
     assert.equal(ended.endDate, recurring.startDate);
   });
 
+  test("changing a series moves what is to come and leaves what already ran", async () => {
+    const { recurring, bookings: rows } = await create();
+    const dates = rows.map((r) => r.date).sort();
+
+    // Stand a week into the series, so the first occurrence is history and three are not.
+    const now = toDate(dates[0]);
+    now.setDate(now.getDate() + 1);
+
+    const { recurring: moved, replaced } = await asA1(() => repo.write.recurring.update({
+      recurringId: recurring.id, horseId: alder.horses[1], now,
+    }));
+
+    assert.equal(moved.horseId, alder.horses[1], "the pattern itself follows the change");
+    assert.equal(replaced, 3, "the three weeks still to come were re-planned");
+
+    const { rows: after } = await client.query(
+      "select date, horse_id from bookings where recurring_id = $1 order by date", [recurring.id]);
+    // One week has already run and stays; the series is then booked four weeks AHEAD again, so
+    // five rows rather than four. A change leaves the coach with the same horizon she had
+    // before it — not with a series that quietly got shorter because she edited it.
+    assert.equal(after.length, 5, "the past week kept, and four booked ahead of the change");
+    assert.equal(
+      after[0].horse_id, alder.horses[0],
+      "the lesson that already happened keeps the horse it actually ran with",
+    );
+    for (const r of after.slice(1)) {
+      assert.equal(r.horse_id, alder.horses[1], "every future week is on the new horse");
+    }
+  });
+
+  test("a week already moved to another horse by hand survives a change to the pattern", async () => {
+    const { recurring, bookings: rows } = await create();
+    const future = rows.map((r) => r.date).sort().slice(1);
+
+    // The coach substituted one week onto a third horse — "Duke is lame that Tuesday".
+    await client.query(
+      "update bookings set horse_id = $1 where recurring_id = $2 and date = $3",
+      [alder.horses[2], recurring.id, future[1]]);
+
+    const now = toDate(rows.map((r) => r.date).sort()[0]);
+    now.setDate(now.getDate() + 1);
+    const { keptSubstitutions } = await asA1(() => repo.write.recurring.update({
+      recurringId: recurring.id, horseId: alder.horses[1], now,
+    }));
+
+    assert.equal(keptSubstitutions, 1, "the hand-made exception is recognised as one");
+    const { rows: kept } = await client.query(
+      "select horse_id from bookings where recurring_id = $1 and date = $2",
+      [recurring.id, future[1]]);
+    assert.equal(
+      kept[0].horse_id, alder.horses[2],
+      "changing the standing horse must not quietly undo a deliberate one-off",
+    );
+  });
+
+  test("a change that cannot be booked every week changes nothing at all", async () => {
+    const { recurring, bookings: rows } = await create();
+    const dates = rows.map((r) => r.date).sort();
+    const now = toDate(dates[0]);
+    now.setDate(now.getDate() + 1);
+
+    // The BARN-MATE takes the target horse on the third week, at this time. It has to be the
+    // other trainer: this coach is already teaching that slot — it is her own series — so she
+    // cannot be the one to occupy it, and trying makes the SETUP fail on trainer_free rather
+    // than the update failing on horse_free. Horses are account-scoped precisely so that one
+    // coach's booking takes the animal out of the other's reach.
+    const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };
+    const repoA2 = forTenant(db, { ...tenantA2, client });
+    await withTenantTransaction(client, tenantA2, () => repoA2.write.bookings.create({
+      studentId: a2.students[0], horseId: alder.horses[1], lessonTypeId: a2.lessonTypes[1],
+      date: toDate(dates[2]), start: FREE,
+    }));
+
+    await assert.rejects(
+      asA1(() => repo.write.recurring.update({
+        recurringId: recurring.id, horseId: alder.horses[1], now,
+      })),
+      (err) => err instanceof BookingRejected,
+    );
+
+    // The deletion and the re-plan are in one transaction, so a refusal leaves the series
+    // exactly as it was rather than half-moved or missing its upcoming weeks.
+    const { rows: after } = await client.query(
+      "select horse_id from bookings where recurring_id = $1", [recurring.id]);
+    assert.equal(after.length, 4, "nothing was dropped");
+    for (const r of after) {
+      assert.equal(r.horse_id, alder.horses[0], "and nothing was moved");
+    }
+  });
+
+  test("an ended series cannot be changed", async () => {
+    const { recurring } = await create();
+    await asA1(() => repo.write.recurring.end({ recurringId: recurring.id, now: DATE }));
+    await assert.rejects(
+      asA1(() => repo.write.recurring.update({
+        recurringId: recurring.id, horseId: alder.horses[1], now: DATE,
+      })),
+      /has ended and cannot be changed/,
+    );
+  });
+
   test("another trainer's series cannot be ended", async () => {
     const { recurring } = await create();
     const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };

@@ -168,6 +168,82 @@ const asDateString = (d) =>
 export function writesFor({ db, client, accountId, trainerId, engineInputsFor }) {
   const tenant = { accountId, trainerId };
 
+  /**
+   * Work out a series' occurrences, prove every one of them bookable, and price each.
+   *
+   * Shared by create and update so the two cannot drift. The expensive property here is
+   * ALL-OR-NOTHING: this writes nothing and throws on the first week that fails, so a caller
+   * that has already deleted the occurrences it is replacing is safe — the transaction rolls
+   * the deletion back with it.
+   *
+   * Each week is judged against a world that already contains the weeks planned before it.
+   * Occurrences are seven days apart and the rest-day window is seven days wide, so consecutive
+   * weeks sit exactly on that boundary: validating each in isolation would pass a pattern that
+   * its own second week breaks.
+   */
+  async function planSeries({
+    studentId, horseId, lessonTypeId, day, start, from,
+    occurrences, manualAdjustment = 0, status = "confirmed", skip = new Set(),
+  }) {
+    if (!Number.isInteger(day) || day < 0 || day > 6) {
+      throw new Error(`a recurring pattern needs a weekday index 0-6, got ${day}`);
+    }
+    if (occurrences < 1) throw new Error("a recurring pattern needs at least one occurrence");
+
+    // The first date on or after `from` that falls on this weekday, then weekly.
+    let first = new Date(toDate(from));
+    while (first.getDay() !== day) first.setDate(first.getDate() + 1);
+    const dates = Array.from({ length: occurrences }, (_, i) => {
+      const d = new Date(first);
+      d.setDate(d.getDate() + i * 7);
+      return d;
+    // `skip` holds the dates a caller is keeping as they are — a week the coach deliberately
+    // put on a different horse. Planning one anyway would collide with the row being kept and
+    // fail `trainer_free` against a lesson that is supposed to stay.
+    }).filter((d) => !skip.has(asDateString(d)));
+
+    // Locked in date order, every day up front. Two coaches whose patterns overlap could
+    // otherwise take each other's days in opposite orders and deadlock.
+    for (const d of dates) await lockTrainerDay(client, trainerId, asDateString(d));
+
+    const planned = [];
+    for (const date of dates) {
+      const ctx = await engineInputsFor(date);
+      const student = ctx.students.find((s) => s.id === studentId);
+      const horse = ctx.horses.find((h) => h.id === horseId);
+      const lessonType = ctx.lessonTypes.find((l) => l.id === lessonTypeId);
+      if (!student) throw new Error(`no student ${studentId} visible to this trainer`);
+      if (!horse) throw new Error(`no horse ${horseId} visible to this account`);
+      if (!lessonType) throw new Error(`no lesson type ${lessonTypeId} visible to this trainer`);
+
+      const validation = validateBooking({
+        ...ctx,
+        bookings: [...ctx.bookings, ...planned.map((p) => p.engineShape)],
+        trainerBookings: [...ctx.trainerBookings, ...planned.map((p) => p.engineShape)],
+        student, horse, lessonType, date, start, manualAdjustment,
+      });
+      if (!validation.ok) {
+        // Which week broke travels with the refusal: "it fails on 6 October" is actionable,
+        // "the pattern was rejected" sends the coach checking all four by hand.
+        throw new BookingRejected(validation.checks, { date: asDateString(date) });
+      }
+
+      const q = validation.quote ?? priceFor({
+        student, lessonType, date, start, manualAdjustment,
+        priceBands: ctx.priceBands, trainerConfig: ctx.trainerConfig,
+      });
+      const endTime = minToStr(parseTime(start) + lessonType.durationMin);
+      planned.push({
+        date, endTime, quote: q,
+        engineShape: {
+          id: `planned-${asDateString(date)}`, studentId, horseId, lessonTypeId,
+          date, start, end: endTime, status, isBillable: false,
+        },
+      });
+    }
+    return planned;
+  }
+
   return {
     bookings: {
       /**
@@ -349,57 +425,11 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
         }
         if (occurrences < 1) throw new Error("a recurring pattern needs at least one occurrence");
 
-        // The first date on or after startDate that falls on this weekday, then weekly.
-        const from = toDate(startDate);
-        let first = new Date(from);
-        while (first.getDay() !== day) first.setDate(first.getDate() + 1);
-        const dates = Array.from({ length: occurrences }, (_, i) => {
-          const d = new Date(first);
-          d.setDate(d.getDate() + i * 7);
-          return d;
+        const planned = await planSeries({
+          studentId, horseId, lessonTypeId, day, start, from: startDate,
+          occurrences, manualAdjustment, status,
         });
-
-        // Locked in date order, every day up front. Two coaches creating overlapping patterns
-        // in different orders would otherwise be able to deadlock on each other's days.
-        for (const d of dates) await lockTrainerDay(client, trainerId, asDateString(d));
-
-        const planned = [];
-        for (const date of dates) {
-          const ctx = await engineInputsFor(date);
-          const student = ctx.students.find((s) => s.id === studentId);
-          const horse = ctx.horses.find((h) => h.id === horseId);
-          const lessonType = ctx.lessonTypes.find((l) => l.id === lessonTypeId);
-          if (!student) throw new Error(`no student ${studentId} visible to this trainer`);
-          if (!horse) throw new Error(`no horse ${horseId} visible to this account`);
-          if (!lessonType) throw new Error(`no lesson type ${lessonTypeId} visible to this trainer`);
-
-          const validation = validateBooking({
-            ...ctx,
-            // The occurrences decided on so far are part of the world the next one is judged
-            // against — they are not in the database yet, and the horse does not care.
-            bookings: [...ctx.bookings, ...planned.map((p) => p.engineShape)],
-            trainerBookings: [...ctx.trainerBookings, ...planned.map((p) => p.engineShape)],
-            student, horse, lessonType, date, start, manualAdjustment,
-          });
-          if (!validation.ok) {
-            // Which week broke travels with the refusal: "it fails on 6 October" is actionable,
-            // "the pattern was rejected" sends the coach checking all four by hand.
-            throw new BookingRejected(validation.checks, { date: asDateString(date) });
-          }
-
-          const q = validation.quote ?? priceFor({
-            student, lessonType, date, start, manualAdjustment,
-            priceBands: ctx.priceBands, trainerConfig: ctx.trainerConfig,
-          });
-          const endTime = minToStr(parseTime(start) + lessonType.durationMin);
-          planned.push({
-            date, endTime, quote: q,
-            engineShape: {
-              id: `planned-${asDateString(date)}`, studentId, horseId, lessonTypeId,
-              date, start, end: endTime, status, isBillable: false,
-            },
-          });
-        }
+        const dates = planned.map((p) => p.date);
 
         const [pattern] = await db.insert(recurringBookings).values({
           trainerId, studentId, horseId, lessonTypeId,
@@ -422,6 +452,137 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
             notes,
           }))).returning();
           return { recurring: pattern, bookings: rows };
+        } catch (err) {
+          const pg = pgErrorOf(err);
+          if (pg?.code === "23P01") throw new SlotTaken(pg.constraint);
+          if (pg?.code === "55P03") throw new BookingBusy(LOCK_TIMEOUT_SECONDS);
+          throw err;
+        }
+      },
+
+      /**
+       * Change a standing slot from here on, leaving what already happened alone.
+       *
+       * That split is the whole semantics. A coach moving a rider's Tuesday to Thursday, or
+       * swapping the horse, is saying something about the weeks to come — not rewriting the
+       * lessons that already ran. Those are historical facts: the ride tallies counted them,
+       * the welfare forecast counted them, and the rider was charged for them. So the past
+       * occurrences keep the horse, day, time and price they actually had.
+       *
+       * The upcoming ones are DELETED and re-planned rather than patched in place, because a
+       * patch cannot answer the question that matters. Moving a series onto a different horse
+       * has to re-ask whether that horse is free every week, is within its daily cap every week,
+       * and is a legal pairing for this rider — which is `planSeries`, not an UPDATE statement.
+       * Re-planning also re-prices from scratch: a pattern that moves out of the late-afternoon
+       * band must stop carrying the premium, and carrying the old amount forward would show an
+       * after-school price on a lesson that is no longer after school.
+       *
+       * Deleting BEFORE validating is deliberate and safe. The occurrences being replaced are
+       * exactly the ones the new plan would collide with — swap only the horse and every week
+       * fails `trainer_free` against its own old row — so they have to be gone before the engine
+       * looks. If any week then fails, the whole transaction rolls back and the deletion is
+       * undone with it: there is no state in which the series is half-moved.
+       */
+      async update({
+        recurringId, horseId, lessonTypeId, day, start,
+        now = new Date(), occurrences = 4, manualAdjustment = 0, notes,
+      }) {
+        await assertInTenantTransaction(client, tenant);
+        const [pattern] = await db.select().from(recurringBookings)
+          .where(and(
+            eq(recurringBookings.trainerId, trainerId),
+            eq(recurringBookings.id, recurringId),
+          ));
+        if (!pattern) throw new Error(`no recurring pattern ${recurringId} visible to this trainer`);
+        if (pattern.status !== "active") {
+          throw new Error(`recurring pattern ${recurringId} has ended and cannot be changed`);
+        }
+
+        const next = {
+          studentId: pattern.studentId,
+          horseId: horseId ?? pattern.horseId,
+          lessonTypeId: lessonTypeId ?? pattern.lessonTypeId,
+          day: day ?? DOW_NAME.indexOf(pattern.dayOfWeek),
+          start: start ?? toHHMM(pattern.startTime),
+        };
+
+        const today = asDateString(now);
+
+        // A week already moved onto a different horse is a deliberate one-off — "Rocket this
+        // Tuesday, Duke is lame" — and changing the standing horse must not quietly undo it.
+        // The test is the horse: an occurrence still on the pattern's own horse is following
+        // the pattern, and anything else was overridden by hand. The screen promises exactly
+        // this ("Occurrences already substituted to another horse are left alone"), and before
+        // this it was a promise only the prototype's local state kept.
+        const upcoming = await db.select().from(bookings)
+          .where(and(
+            eq(bookings.trainerId, trainerId),
+            eq(bookings.recurringId, recurringId),
+            sql`${bookings.date} >= ${today}`,
+            inArray(bookings.status, ["pending", "confirmed"]),
+          ));
+        const substituted = upcoming.filter((b) => b.horseId !== pattern.horseId);
+        const replaceable = upcoming.filter((b) => b.horseId === pattern.horseId);
+
+        const removed = replaceable.length
+          ? await db.delete(bookings)
+              .where(and(
+                eq(bookings.trainerId, trainerId),
+                inArray(bookings.id, replaceable.map((b) => b.id)),
+              ))
+              .returning()
+          : [];
+
+        const planned = await planSeries({
+          ...next, from: today, occurrences, manualAdjustment, status: "confirmed",
+          skip: new Set(substituted.map((b) => asDateString(b.date))),
+        });
+
+        const [updated] = await db.update(recurringBookings)
+          .set({
+            horseId: next.horseId,
+            lessonTypeId: next.lessonTypeId,
+            dayOfWeek: DOW_NAME[next.day],
+            startTime: next.start,
+            // `start_date` is left alone on purpose: it records when this rider's standing slot
+            // began, which is not changed by moving it to a different horse.
+            ...(notes === undefined ? {} : { notes }),
+            updatedAt: sql`now()`,
+          })
+          .where(and(
+            eq(recurringBookings.trainerId, trainerId),
+            eq(recurringBookings.id, recurringId),
+          ))
+          .returning();
+
+        try {
+          const rows = await db.insert(bookings).values(planned.map((p) => ({
+            trainerId, recurringId, studentId: next.studentId,
+            horseId: next.horseId, lessonTypeId: next.lessonTypeId,
+            date: asDateString(p.date), startTime: next.start, endTime: p.endTime,
+            status: "confirmed",
+            basePrice: p.quote.basePrice,
+            bandAdjustment: p.quote.bandAdjustment,
+            frequencyDiscount: p.quote.frequencyDiscount,
+            offerDiscount: p.quote.offerDiscount,
+            manualAdjustment: p.quote.manualAdjustment,
+            price: p.quote.price,
+            isBillable: false,
+            isNewStudent: false,
+            notes: notes ?? pattern.notes,
+          }))).returning();
+
+          await db.insert(studentAlerts).values({
+            studentId: pattern.studentId,
+            kind: "recurring_changed",
+            detail: `Your standing lesson is now ${DOW_LABEL[DOW_NAME[next.day]]}s at ` +
+                    `${next.start}. The next ${rows.length} are booked.`,
+          });
+
+          return {
+            recurring: updated, bookings: rows,
+            replaced: removed.length, keptSubstitutions: substituted.length,
+          };
         } catch (err) {
           const pg = pgErrorOf(err);
           if (pg?.code === "23P01") throw new SlotTaken(pg.constraint);
