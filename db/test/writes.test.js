@@ -408,7 +408,7 @@ describe("standing weekly slots", () => {
 
   const create = (over = {}) =>
     asA1(() => repo.write.recurring.create({
-      studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1].id,
+      studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1],
       day: TUESDAY, start: FREE, startDate: SHARED_DATE, occurrences: 4, ...over,
     }));
 
@@ -436,7 +436,7 @@ describe("standing weekly slots", () => {
     const third = new Date(DATE);
     third.setDate(third.getDate() + 14);
     await asA1(() => repo.write.bookings.create({
-      studentId: a1.students[1], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1].id,
+      studentId: a1.students[1], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1],
       date: third, start: FREE,
     }));
 
@@ -468,7 +468,15 @@ describe("standing weekly slots", () => {
     const { rows: left } = await client.query(
       "select date from bookings where recurring_id = $1", [recurring.id]);
     assert.equal(left.length, 1, "the lesson that already happened is untouched");
-    assert.equal(left[0].date, first);
+    // Compared as a date STRING on both sides. This query goes through the raw driver, which
+    // parses a `date` column into a Date at local midnight, while drizzle hands the same column
+    // back as "2026-09-15" — so the two representations are never === each other, and asserting
+    // on them directly fails on a row that is perfectly correct.
+    const kept = left[0].date;
+    const keptString = kept instanceof Date
+      ? `${kept.getFullYear()}-${String(kept.getMonth() + 1).padStart(2, "0")}-${String(kept.getDate()).padStart(2, "0")}`
+      : String(kept);
+    assert.equal(keptString, first, "and it is the first week, the one that already ran");
   });
 
   test("a series ended before it begins closes on the day it would have started", async () => {
