@@ -240,6 +240,9 @@ function build() {
       unlocked: i < 22,
       guardianName: minor ? pick(["Dana", "Marie", "Paul", "Yusuf", "Helen"]) + " " + p.name.split(" ")[1] : null,
       guardianPhone: minor ? `555-01${String(20 + i).padStart(2, "0")}` : null,
+      // Required before a minor's profile can be approved — `profileGaps` on the review screen
+      // refuses without it, so a seed that omits it produces riders the coach cannot approve.
+      guardianRelationship: minor ? pick(["Parent", "Parent", "Grandparent", "Legal Guardian"]) : null,
       phone: `555-02${String(10 + i).padStart(2, "0")}`,
       windows: [],
       ridesPerWeek: i < 12 ? (i < 5 ? 3 : 2) : 1,
@@ -716,10 +719,10 @@ async function main() {
   await bulk(client, "students",
     ["id", "trainer_id", "name", "phone", "emergency_contact_name", "emergency_contact_phone",
      "age", "experience_level", "riding_styles", "weight", "guardian_name", "guardian_phone",
-     "profile_status", "recurring_potential_unlocked", "active"],
+     "guardian_relationship", "profile_status", "recurring_potential_unlocked", "active"],
     barn.students.map((s) => [s.id, barn.trainerId, s.name, s.phone, "Emergency Contact",
       "555-0199", s.age, s.level, arr(s.styles), s.weight, s.guardianName, s.guardianPhone,
-      s.profileStatus, s.unlocked, true]));
+      s.guardianRelationship, s.profileStatus, s.unlocked, true]));
 
   await bulk(client, "lesson_types",
     ["id", "trainer_id", "name", "duration_min", "ride_time_min", "is_intro", "is_group",

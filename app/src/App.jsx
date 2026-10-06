@@ -62,6 +62,14 @@ const RIDING_STYLES = ["English", "Western"];
 const EXP_LEVELS = ["beginner", "intermediate", "advanced"];
 const EXP_RANK = { beginner: 0, intermediate: 1, advanced: 2 };
 
+// A Date -> "YYYY-MM-DD", read from LOCAL components.
+//
+// Not toISOString(), which converts to UTC first: a lesson at local midnight on the 15th is
+// 07:00 UTC on the 15th here, but anywhere east of Greenwich it is the 14th, and the booking
+// lands on the wrong day. The same trap `toDate` exists to avoid on the way in.
+const isoDateOf = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 function fmtDate(d) { return `${d.getMonth() + 1}/${d.getDate()}`; }
 function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
@@ -1530,6 +1538,73 @@ function Screens({ initial }) {
   const setPriceBands = wrap("priceBands");
   const setDisclosures = wrap("disclosures");
   const setDisclosureAcceptances = wrap("disclosureAcceptances");
+
+  // ---- persistence ---------------------------------------------------------------------------
+
+  const [busy, setBusy] = useState(false);
+
+  /**
+   * Replace the whole barn with what the server now holds.
+   *
+   * Through the RAW setters, deliberately: a refresh is not something the coach did, so it must
+   * not land in the undo batch. Wrapping it would make the next Undo offer to revert the act of
+   * reading.
+   */
+  function applyBarn(next) {
+    _setHorses(next.horses);
+    _setStudents(next.students);
+    _setLessonTypes(next.lessonTypes);
+    _setRecurringBookings(next.recurring ?? []);
+    _setBookings(next.trainerBookings ?? next.bookings);
+    _setStudentNotes(next.notes ?? []);
+    _setStudentAlerts(next.alerts ?? []);
+    _setTrainerAvailability(next.availability);
+    _setTrainerConfig(next.trainerConfig);
+    _setTimeOffBlocks(next.timeOffBlocks ?? []);
+    _setOffers(next.offers ?? []);
+    _setPriceBands(next.priceBands);
+  }
+
+  /**
+   * Run a write against the API, then re-read the barn from it.
+   *
+   * Re-reading rather than patching local state from the response, for one reason: the server's
+   * reply is a database ROW, and turning rows into the shapes these screens speak is
+   * `db/repo/to-engine.js`'s job and nothing else's. Mapping write responses here would be a
+   * second copy of that translation — the exact duplication CLAUDE.md spends a section warning
+   * about — to save a round trip the coach will not notice.
+   *
+   * It also means everything the write touched arrives together. Cancelling a lesson writes an
+   * alert, changes a billing flag and frees a slot; a patch would have to know all three, and
+   * would be wrong the day a write starts doing a fourth thing.
+   *
+   * The undo entry is cleared on success, and that is a correctness fix rather than tidiness:
+   * Undo reverses React state, nothing stores the rows a write replaced, and so an Undo offered
+   * after a persisted action would revert the screen while leaving the database as it was. The
+   * next refresh would bring the change back. Better no button than a button that lies.
+   */
+  const [saveError, setSaveError] = useState(null);
+
+  async function persist(run, { onError } = {}) {
+    setBusy(true);
+    setSaveError(null);
+    try {
+      const result = await run();
+      applyBarn(await fetchBarn());
+      setUndoEntry(null);
+      return result ?? true;
+    } catch (err) {
+      // Surfaced, never swallowed. A write that silently does nothing is the worst outcome
+      // available here: the screen goes on showing the change, and the coach finds out it never
+      // happened when a rider turns up for a lesson she thought she had cancelled.
+      if (onError) onError(err);
+      else setSaveError(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleUndo() {
     if (!undoEntry) return;
     const bySlice = {};
@@ -1778,6 +1853,9 @@ function Screens({ initial }) {
     updateBooking, updateStudent, updateHorse, setHorseActive, applyRecurringChange, endRecurringSeries, logOffer, wasOffered, notifyStudent, markStudentAlertsSeen, recomputeFrequencyTiers,
     updateDisclosures, acceptDisclosures,
     sheet, setSheet, showOpenSlots, setShowOpenSlots, role, setRole,
+    // Writes that reach the database go through this; everything else still only moves React
+    // state. `busy` is what stops a double-click becoming two lessons.
+    persist, busy,
   };
 
   const coachNav = {
@@ -1897,8 +1975,20 @@ function Screens({ initial }) {
             <button onClick={() => setRole("student")} className={`text-xs px-3 py-1.5 rounded ${role === "student" ? "bg-gray-900 text-white" : "bg-gray-100"}`}>Student</button>
             <button onClick={handleUndo} disabled={!undoEntry} className={`text-xs px-3 py-1.5 rounded border ${undoEntry ? "border-gray-400 text-gray-700 hover:bg-gray-50" : "border-gray-200 text-gray-300 cursor-not-allowed"}`}>Undo</button>
           </div>
-          <span className="text-xs text-gray-400">Sim. now: {DAY_NAMES[TODAY.getDay()]} {fmtDate(TODAY)}, {timeStr(NOW_MIN)}</span>
+          <span className="text-xs text-gray-400">
+            {busy ? "Saving…" : `Sim. now: ${DAY_NAMES[TODAY.getDay()]} ${fmtDate(TODAY)}, ${timeStr(NOW_MIN)}`}
+          </span>
         </div>
+
+        {saveError && (
+          <div className="bg-red-50 border-b border-red-200 px-3 py-2 flex items-start justify-between gap-2">
+            <div>
+              <p className="text-xs font-medium text-red-800">That didn't save</p>
+              <p className="text-xs text-red-700">{saveError}</p>
+            </div>
+            <button onClick={() => setSaveError(null)} className="text-xs text-red-700 underline shrink-0">Dismiss</button>
+          </div>
+        )}
 
         <div className="p-3">
           {role === "coach"
@@ -2375,6 +2465,12 @@ function WeekAhead(props) {
     </div>
   );
 }
+
+// "no weight limit" is a sentence; `max Infinity lbs` is a leaked implementation detail, and
+// `max  lbs` — what the same line rendered before the caps were revived — is worse, because it
+// reads as a number the coach forgot to fill in rather than as a horse that carries no limit.
+const weightLimitLabel = (horse) =>
+  Number.isFinite(horse.maxWeight) ? `max ${horse.maxWeight} lbs` : "no weight limit";
 
 function HorsesList(props) {
   const { horses, bookings, students, lessonTypes, setSelectedHorseId, navTo, setHorseFormId } = props;
@@ -3033,12 +3129,18 @@ function LessonsScreen(props) {
 }
 
 function ScheduleScreen(props) {
-  const { trainerAvailability, setTrainerAvailability, trainerConfig, setTrainerConfig, timeOffBlocks, setTimeOffBlocks, bookings, navRoot } = props;
+  const { trainerAvailability, setTrainerAvailability, trainerConfig, setTrainerConfig, timeOffBlocks, setTimeOffBlocks, bookings, navRoot, persist, busy } = props;
   const [newOff, setNewOff] = useState({ startDate: "", endDate: "", reason: "" });
 
-  function addWindow(day) { setTrainerAvailability((prev) => [...prev, { id: uid("avail"), day, start: "08:00", end: "12:00" }]); }
-  function removeWindow(id) { setTrainerAvailability((prev) => prev.filter((a) => a.id !== id)); }
-  function updateWindow(id, field, value) { setTrainerAvailability((prev) => prev.map((a) => (a.id === id ? { ...a, [field]: value } : a))); }
+  // Set by the three editors below, cleared when a save succeeds. A flag rather than a
+  // comparison against the server's copy, because after a successful save `persist` replaces
+  // the whole barn — so the thing worth remembering is "has the coach touched this since", not
+  // "does this differ from what arrived".
+  const [availabilityChanged, setAvailabilityChanged] = useState(false);
+
+  function addWindow(day) { setAvailabilityChanged(true); setTrainerAvailability((prev) => [...prev, { id: uid("avail"), day, start: "08:00", end: "12:00" }]); }
+  function removeWindow(id) { setAvailabilityChanged(true); setTrainerAvailability((prev) => prev.filter((a) => a.id !== id)); }
+  function updateWindow(id, field, value) { setAvailabilityChanged(true); setTrainerAvailability((prev) => prev.map((a) => (a.id === id ? { ...a, [field]: value } : a))); }
   function addTimeOff() {
     if (!newOff.startDate || !newOff.endDate) return;
     setTimeOffBlocks((prev) => [...prev, { id: uid("off"), startDate: new Date(newOff.startDate + "T00:00:00"), endDate: new Date(newOff.endDate + "T00:00:00"), reason: newOff.reason }]);
@@ -3070,6 +3172,28 @@ function ScheduleScreen(props) {
             </div>
           );
         })}
+      </div>
+
+      {/* Saved on a button rather than on every edit.
+          The windows are a small set the coach edits as a whole — and `availability.replace`
+          is wholesale, delete-then-insert, for that same reason. Persisting each keystroke
+          would be a round trip per character of a time field, and would write half-finished
+          windows (08:00–08:00 on the way to 08:00–12:00) that the engine would then reject. */}
+      <div className="flex items-center gap-3 mb-6">
+        <Btn
+          variant="primary"
+          disabled={busy || !availabilityChanged}
+          onClick={async () => {
+            if (await persist(() => api.replaceAvailability(trainerAvailability))) {
+              setAvailabilityChanged(false);
+            }
+          }}
+        >
+          {busy ? "Saving…" : "Save availability"}
+        </Btn>
+        <span className="text-xs text-gray-400">
+          {availabilityChanged ? "Unsaved changes" : "Saved"}
+        </span>
       </div>
 
       <SectionTitle>Time off</SectionTitle>
@@ -3528,7 +3652,7 @@ function StudentFormCoach(props) {
 }
 
 function BookingDetail(props) {
-  const { selectedBookingId, bookings, students, horses, lessonTypes, recurringBookings, updateBooking, goBack, setSheet, navTo, setSelectedStudentId, setSelectedHorseId, timeOffBlocks, priceBands, notifyStudent } = props;
+  const { selectedBookingId, bookings, students, horses, lessonTypes, recurringBookings, updateBooking, goBack, setSheet, navTo, setSelectedStudentId, setSelectedHorseId, timeOffBlocks, priceBands, notifyStudent, persist, busy } = props;
   const b = bookings.find((x) => x.id === selectedBookingId);
   if (!b) return <BackHeader title="Pick a lesson" {...backProps(props)} />;
   const st = students.find((s) => s.id === b.studentId);
@@ -3589,12 +3713,35 @@ function BookingDetail(props) {
       {b.notes && <p className="text-xs text-gray-500 mb-2">Notes: {b.notes}</p>}
 
       <div className="space-y-2 mt-4">
-        <Btn variant="danger" className="w-full" disabled={b.status === "early_cancel"} onClick={() => { updateBooking(b.id, { status: "early_cancel", isBillable: false }); notifyStudent(b.studentId, "lesson_cancelled", `${DAY_NAMES[b.date.getDay()]} ${fmtDate(b.date)} ${timeStr(parseTime(b.start))} · cancelled by your coach, not charged`); }}>Mark early cancel</Btn>
-        <Btn variant="danger" className="w-full" disabled={b.status === "late_cancel"} onClick={() => { updateBooking(b.id, { status: "late_cancel", isBillable: true }); notifyStudent(b.studentId, "lesson_cancelled", `${DAY_NAMES[b.date.getDay()]} ${fmtDate(b.date)} ${timeStr(parseTime(b.start))} · cancelled, still charged $${b.price}`); }}>Mark late cancel</Btn>
-        <Btn className="w-full" disabled={!started || ["no_show", "early_cancel", "late_cancel"].includes(b.status)} title={!started ? "Available once the lesson's start time has passed" : ""} onClick={() => { updateBooking(b.id, { status: "no_show", isBillable: true }); notifyStudent(b.studentId, "no_show", `${DAY_NAMES[b.date.getDay()]} ${fmtDate(b.date)} ${timeStr(parseTime(b.start))} · charged $${b.price}`); }}>
+        {/* One cancel button, not two.
+            The prototype offered "early" and "late" as a choice, which let the coach contradict
+            the rule: whether a cancellation is inside the notice period is a fact about the
+            clock, and `cancelDisposition` owns it. The server decides, writes the student's
+            alert itself, and the screen reports what it decided. Waiving a late-cancel charge is
+            a real need and a different action — there is no endpoint for it yet. */}
+        <Btn
+          variant="danger" className="w-full"
+          disabled={busy || ["early_cancel", "late_cancel", "no_show", "completed"].includes(b.status)}
+          onClick={() => persist(() => api.cancelBooking(b.id, { now: NOW, actor: "trainer" }))}
+        >
+          {busy ? "Cancelling…" : "Cancel lesson"}
+        </Btn>
+        <Btn
+          className="w-full"
+          disabled={busy || !started || ["no_show", "early_cancel", "late_cancel"].includes(b.status)}
+          title={!started ? "Available once the lesson's start time has passed" : ""}
+          onClick={() => persist(() => api.settleBooking(b.id, "no_show"))}
+        >
           Mark no-show{!started ? " · after start time" : ""}
         </Btn>
-        <Btn className="w-full" disabled={!["early_cancel", "late_cancel", "no_show"].includes(b.status)} onClick={() => updateBooking(b.id, { status: "confirmed", isBillable: true })}>Reset occurrence (un-cancel)</Btn>
+        <Btn
+          className="w-full"
+          disabled={busy || b.status === "completed" || !started}
+          title={!started ? "Available once the lesson's start time has passed" : ""}
+          onClick={() => persist(() => api.settleBooking(b.id, "completed"))}
+        >
+          Mark completed
+        </Btn>
         {b.recurringId && <Btn variant="danger" className="w-full" onClick={() => setSheet({ type: "end-series", ctx: { recurringId: b.recurringId } })}>End recurring series</Btn>}
       </div>
       <p className="text-xs text-gray-400 mt-3">Completion is automatic — a lesson reads as completed once its day has passed, unless it was cancelled or no-showed first.</p>
@@ -3603,7 +3750,7 @@ function BookingDetail(props) {
 }
 
 function NewBooking(props) {
-  const { students, horses, lessonTypes, bookings, setBookings, setRecurringBookings, setCoachScreen, trainerAvailability, timeOffBlocks, trainerConfig, priceBands } = props;
+  const { students, horses, lessonTypes, bookings, setBookings, setRecurringBookings, setCoachScreen, trainerAvailability, timeOffBlocks, trainerConfig, priceBands, persist, busy } = props;
   const [mode, setMode] = useState("one_time");
   const [studentId, setStudentId] = useState(students[0].id);
   const [lessonTypeId, setLessonTypeId] = useState(() => { const d = defaultLessonType(props.lessonTypes); return d ? d.id : ""; });
@@ -3714,10 +3861,24 @@ function NewBooking(props) {
         </p>
       )}
 
-      <Btn variant="primary" disabled={!canSubmit} className="w-full" onClick={() => {
+      <Btn variant="primary" disabled={!canSubmit || busy} className="w-full" onClick={async () => {
         if (mode === "one_time") {
-          setBookings((prev) => [...prev, { id: uid("bkg"), createdAt: new Date(TODAY), recurringId: null, studentId, horseId: chosenHorse.id, lessonTypeId, date: firstDate, start: time, status: "confirmed", ...priceFields, isBillable: true, isNewStudent: !bookings.some((b) => b.studentId === studentId), notes: overrideNote }]);
-          props.notifyStudent(studentId, "booking_created", `${DAY_NAMES[firstDate.getDay()]} ${fmtDate(firstDate)} ${timeStr(parseTime(time))} with ${chosenHorse.name} · $${priceFields.price}`);
+          // The price is NOT sent. The server stamps the receipt from its own bands and the
+          // student's own tier, inside the same transaction that validates and inserts — so a
+          // client that had stale bands cannot write a price that was never real. What is shown
+          // above is a preview computed by the same engine, and the server's answer wins.
+          const ok = await persist(() => api.createBooking({
+            studentId,
+            horseId: chosenHorse.id,
+            lessonTypeId,
+            date: isoDateOf(firstDate),
+            start: time,
+            status: "confirmed",
+            manualAdjustment: manualAdj || 0,
+            notes: overrideNote,
+            isNewStudent: !bookings.some((b) => b.studentId === studentId),
+          }));
+          if (!ok) return; // the refusal is already on screen; stay here so it can be read
           props.setCoachDate(firstDate);
           setCoachScreen("day");
         } else {
@@ -3733,7 +3894,17 @@ function NewBooking(props) {
           props.setSelectedStudentId(studentId);
           setCoachScreen("student-profile");
         }
-      }}>{mode === "one_time" ? "Create booking" : "Create recurring lesson"}</Btn>
+      }}>{busy ? "Saving…" : mode === "one_time" ? "Create booking" : "Create recurring lesson"}</Btn>
+      {mode !== "one_time" && (
+        // Said out loud rather than discovered by refreshing. `repo.write` has no recurring
+        // patterns yet (CLAUDE.md, "The write surface is partial"), so this button still only
+        // moves React state — and a standing weekly slot that silently evaporates is a worse
+        // thing to find out by accident than almost anything else on these screens.
+        <p className="text-xs text-amber-700 mt-2">
+          Recurring lessons aren't saved to the database yet — this one will disappear when you
+          reload. One-off bookings do save.
+        </p>
+      )}
     </div>
   );
 }
@@ -3761,7 +3932,7 @@ function AlertsScreen(props) {
 }
 
 function ReviewProfile(props) {
-  const { selectedStudentId, students, horses, updateStudent, setSheet, navTo, setSelectedBookingId, bookings } = props;
+  const { selectedStudentId, students, horses, updateStudent, setSheet, navTo, setSelectedBookingId, bookings, persist, busy } = props;
   const s = students.find((x) => x.id === selectedStudentId);
   // Hooks run before any early return, so the screen can't break when no student is selected.
   const [form, setForm] = useState(s
@@ -3789,10 +3960,14 @@ function ReviewProfile(props) {
       <p className="text-sm mb-4">{s.noRideHorses.length ? s.noRideHorses.map((id) => horses.find((h) => h.id === id).name).join(", ") : "None"}</p>
       <Field label="Coach notes" className="mb-3"><textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full" rows={3} /></Field>
       {profileGaps(form).length > 0 && <p className="text-xs text-gray-500 mb-2">Can't approve yet — still needed: {profileGaps(form).join(", ")}</p>}
-      <Btn variant="primary" className="w-full" disabled={profileGaps(form).length > 0} onClick={() => {
-        updateStudent(s.id, { ...form, age: Number(form.age), weight: Number(form.weight), notes, profileStatus: "approved" });
-        navTo("students");
-      }}>Approve profile</Btn>
+      <Btn variant="primary" className="w-full" disabled={busy || profileGaps(form).length > 0} onClick={async () => {
+        const ok = await persist(() => api.updateStudent(s.id, {
+          ...form, age: Number(form.age), weight: Number(form.weight), notes, profileStatus: "approved",
+        }));
+        // Only leave the screen if it actually saved. Navigating away on failure is how a coach
+        // ends up believing she approved someone she did not.
+        if (ok) navTo("students");
+      }}>{busy ? "Approving…" : "Approve profile"}</Btn>
     </div>
   );
 }
@@ -4773,12 +4948,6 @@ const reviveEach = (rows, ...fields) =>
 // `db/repo/to-engine.js` already warns that mapping these to 0 "would silently ban every rider
 // from an unrestricted horse". JSON does exactly that, one layer further down, which is why the
 // repository being right about it is not enough on its own.
-// "no weight limit" is a sentence; `max Infinity lbs` is a leaked implementation detail, and
-// `max  lbs` — what the same line rendered before the caps were revived — is worse, because it
-// reads as a number the coach forgot to fill in rather than as a horse that carries no limit.
-const weightLimitLabel = (horse) =>
-  Number.isFinite(horse.maxWeight) ? `max ${horse.maxWeight} lbs` : "no weight limit";
-
 const UNCAPPED = ["maxWeight", "maxDailyAdult", "maxDailyOverall"];
 const reviveCaps = (horses) =>
   (horses ?? []).map((h) => {
@@ -4814,6 +4983,75 @@ function reviveBarn(data) {
 // prototype used, kept for now so the seeded fixture's dates line up — a real deployment passes
 // today. That is the last piece of prototype-only behaviour left in the data path, and it is
 // here rather than buried in a component so it is obvious what to delete.
+/** The whole barn, as the screens speak it. One request. */
+async function fetchBarn() {
+  const res = await fetch(`/api/bootstrap?date=${SIMULATED_TODAY_ISO}`);
+  if (!res.ok) throw new Error(`the API answered ${res.status}`);
+  return reviveBarn(await res.json());
+}
+
+/**
+ * A refusal the screens can render, carrying whatever the server was able to say about it.
+ *
+ * The engine's refusal is not a failure — it is the expected answer to "may I book this?", and
+ * it arrives as a 422 with all eight checks attached. Flattening that into a message would throw
+ * away the only thing the coach wants to see, which is why `checks` travels on the error.
+ */
+class ApiError extends Error {
+  constructor(message, { checks = null, status = 0 } = {}) {
+    super(message);
+    this.checks = checks;
+    this.status = status;
+  }
+}
+
+/**
+ * Every write the screens can persist.
+ *
+ * The list is short because the write surface behind it is short: bookings, students and
+ * availability are what `repo.write` covers today. Horses, lesson types, price bands, recurring
+ * patterns, offers and substitutions have no endpoint yet, and the screens that change those
+ * still only change React state — see `persisted` in the handlers below, which is what keeps
+ * that distinction visible rather than letting it be discovered by refreshing.
+ */
+const api = {
+  async send(method, path, body) {
+    let res;
+    try {
+      res = await fetch(path, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new ApiError(`could not reach the server (${err.message})`);
+    }
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok) return payload;
+    if (res.status === 422 && payload.error === "booking_rejected") {
+      // The engine said no, and said why — eight times over.
+      const failed = (payload.checks ?? []).filter((c) => !c.pass).map((c) => c.label);
+      throw new ApiError(failed.join("; ") || "the booking was refused", {
+        checks: payload.checks, status: 422,
+      });
+    }
+    if (res.status === 409) throw new ApiError("that slot was taken a moment ago", { status: 409 });
+    if (res.status === 503) throw new ApiError("the barn is busy — try that again", { status: 503 });
+    throw new ApiError(payload.message ?? `the server answered ${res.status}`, { status: res.status });
+  },
+
+  createBooking: (b) => api.send("POST", "/api/bookings", b),
+  // `now` is sent rather than left to the server, because the screens run on a simulated clock
+  // and the server's own `new Date()` is the real one. The engine decides early vs. late from
+  // that value, so defaulting it would judge every lesson in the seeded barn as long past.
+  cancelBooking: (id, { now, actor = "trainer" }) =>
+    api.send("POST", `/api/bookings/${id}/cancel`, { now: now.toISOString(), actor }),
+  settleBooking: (id, outcome) => api.send("POST", `/api/bookings/${id}/settle`, { outcome }),
+  createStudent: (s) => api.send("POST", "/api/students", s),
+  updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
+  replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
+};
+
 export default function App() {
   const [state, setState] = React.useState({ status: "loading" });
 
@@ -4821,9 +5059,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/bootstrap?date=${SIMULATED_TODAY_ISO}`);
-        if (!res.ok) throw new Error(`the API answered ${res.status}`);
-        const data = reviveBarn(await res.json());
+        const data = await fetchBarn();
         if (!cancelled) setState({ status: "ready", data });
       } catch (err) {
         if (!cancelled) setState({ status: "error", message: err.message });

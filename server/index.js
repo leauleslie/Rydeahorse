@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 import { createRuntime } from "../db/request.js";
 import { forTenant } from "../db/repo/index.js";
 import { BookingRejected, SlotTaken, BookingBusy } from "../db/repo/writes.js";
-import { toDate, toEngineRecurring } from "../db/repo/to-engine.js";
+import {
+  toDate, toEngineRecurring, fromEngineStudentPatch, fromEngineAvailability,
+} from "../db/repo/to-engine.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envLocal = join(here, "..", ".env.local");
@@ -187,13 +189,18 @@ app.post("/api/bookings/:id/cancel", handler(({ repo, req }) =>
 app.post("/api/bookings/:id/settle", handler(({ repo, req }) =>
   repo.write.bookings.settle({ bookingId: req.params.id, outcome: req.body.outcome })));
 
-app.post("/api/students", handler(({ repo, req }) => repo.write.students.create(req.body)));
+// The screens speak the engine's vocabulary in both directions, so what arrives here is
+// translated the same way what leaves here is — through `to-engine.js` and nowhere else. These
+// handlers took `req.body` straight through before, which meant a screen wanting to change a
+// rider's profile had to know the column was `recurring_potential_unlocked`.
+app.post("/api/students", handler(({ repo, req }) =>
+  repo.write.students.create(fromEngineStudentPatch(req.body))));
 
 app.patch("/api/students/:id", handler(({ repo, req }) =>
-  repo.write.students.update({ studentId: req.params.id, ...req.body })));
+  repo.write.students.update({ studentId: req.params.id, ...fromEngineStudentPatch(req.body) })));
 
 app.put("/api/availability", handler(({ repo, req }) =>
-  repo.write.availability.replace(req.body.windows ?? [])));
+  repo.write.availability.replace(fromEngineAvailability(req.body.windows))));
 
 const port = Number(process.env.PORT ?? 3001);
 const server = app.listen(port, () => {

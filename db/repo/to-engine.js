@@ -86,6 +86,25 @@ export function toEngineStudent(
     noRideHorses: noRideHorseIds,
     frequencyTier: row.frequencyTier ?? 0,
 
+    // ---- the profile the coach reviews ----
+    //
+    // The rules never read any of these; the REVIEW SCREEN does, and without them it cannot be
+    // satisfied. `profileGaps` refuses to enable "Approve profile" until an emergency contact
+    // is present and, for a minor, a guardian — so leaving them out of this mapping made every
+    // profile permanently unapprovable, including the ones that had the fields filled in all
+    // along. Not a rules gap, which is why it survived a rules-shaped reading of this file.
+    phone: row.phone,
+    email: row.email,
+    emergencyContactName: row.emergencyContactName,
+    emergencyContactPhone: row.emergencyContactPhone,
+    guardianName: row.guardianName,
+    guardianPhone: row.guardianPhone,
+    guardianRelationship: row.guardianRelationship,
+    notes: row.notes,
+    // The screens' shorter name for `recurring_potential_unlocked`; `fromEngineStudentPatch`
+    // maps it back on the way in.
+    recurringUnlocked: row.recurringPotentialUnlocked ?? false,
+
     // ---- read by matching only; the rules ignore all of these ----
     // Offering a time nobody asked for is noise, so matching needs to know what they asked for.
     active: row.active,
@@ -156,6 +175,24 @@ export function toEngineBooking(row) {
     end: toHHMM(row.endTime),
     status: row.status,
     isBillable: row.isBillable,
+
+    // The stored receipt, carried whole.
+    //
+    // A price is the one thing in this schema that is deliberately NOT derived: a lesson priced
+    // in March against March's bands must still read as $65 in September, so the five components
+    // and the total are stamped at creation and never recomputed. Sending only the total — or,
+    // as this did until now, none of it — leaves every screen that shows a price unable to show
+    // the reasoning behind it, which CLAUDE.md makes a product constraint rather than a nicety.
+    // The coach saw a bare "$" where the receipt should be.
+    //
+    // Zero is a real value here and `?? 0` is right: the columns are NOT NULL with a 0 default,
+    // so an absent adjustment means no adjustment, not an unknown one.
+    basePrice: row.basePrice,
+    bandAdjustment: row.bandAdjustment ?? 0,
+    frequencyDiscount: row.frequencyDiscount ?? 0,
+    offerDiscount: row.offerDiscount ?? 0,
+    manualAdjustment: row.manualAdjustment ?? 0,
+    price: row.price,
   };
 }
 
@@ -263,4 +300,73 @@ export function toEngineTrainerConfig(row) {
   };
 }
 
-export const _internals = { DOW_INDEX };
+// ---------------------------------------------------------------------------
+// The other direction: what the screens send back
+// ---------------------------------------------------------------------------
+//
+// Writes need the inverse of everything above, and it belongs here for the same reason the
+// forward mapping does — one translation layer, not two. The alternative is column names
+// leaking into `app/src/App.jsx`, where `recurring_potential_unlocked` would be spelled out in
+// a click handler and go stale the first time the column is renamed.
+//
+// Both are WHITELISTS, not spreads. A patch that forwarded whatever arrived would let a caller
+// set `trainer_id` and move a rider to another coach — a tenancy hole with a friendly
+// signature. `writes.js` deletes `trainerId` defensively for the same reason; this is the
+// outer of the two fences.
+
+// Date#getDay() index -> the day_of_week enum. The inverse of DOW_INDEX.
+const DOW_NAME = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/** Engine field name -> column name, for the fields a screen is allowed to change. */
+const STUDENT_PATCH_FIELDS = {
+  name: "name",
+  phone: "phone",
+  email: "email",
+  age: "age",
+  weight: "weight",
+  experienceLevel: "experienceLevel",
+  ridingStyles: "ridingStyles",
+  notes: "notes",
+  active: "active",
+  profileStatus: "profileStatus",
+  guardianName: "guardianName",
+  guardianPhone: "guardianPhone",
+  guardianRelationship: "guardianRelationship",
+  emergencyContactName: "emergencyContactName",
+  emergencyContactPhone: "emergencyContactPhone",
+  // The screens' shorter name for it. This single rename is most of why this function exists.
+  recurringUnlocked: "recurringPotentialUnlocked",
+  notificationPref: "notificationPreference",
+};
+
+/**
+ * A student patch from the screens -> the columns it is allowed to touch.
+ *
+ * Silently drops anything not on the list, which is the point: the screens carry derived and
+ * display-only fields on the same object (`targetTimes`, `noRideHorses`, `frequencyTier`), and
+ * those are either junction tables or things only a job may set.
+ */
+export function fromEngineStudentPatch(patch) {
+  const out = {};
+  for (const [from, column] of Object.entries(STUDENT_PATCH_FIELDS)) {
+    if (patch[from] !== undefined) out[column] = patch[from];
+  }
+  return out;
+}
+
+/**
+ * Availability windows from the screens -> rows for `availability.replace`.
+ *
+ * `day` is a Date#getDay() index on the way in and a `day_of_week` enum on the way out, which
+ * is the same translation `toEngineAvailability` does in reverse — and the one that silently
+ * produces a Sunday lesson on a Monday if it is skipped.
+ */
+export function fromEngineAvailability(windows) {
+  return (windows ?? []).map((w) => ({
+    dayOfWeek: typeof w.day === "number" ? DOW_NAME[w.day] : w.day,
+    startTime: w.start ?? w.startTime,
+    endTime: w.end ?? w.endTime,
+  }));
+}
+
+export const _internals = { DOW_INDEX, DOW_NAME };

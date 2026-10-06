@@ -76,6 +76,29 @@ describe("horses", () => {
 describe("students", () => {
   const row = { id: "s1", name: "Alex", age: 34, experienceLevel: "intermediate", ridingStyles: ["English"], weight: 140, frequencyTier: 1 };
 
+  test("the contact details the coach reviews come through", () => {
+    // No rule reads any of these, which is exactly why they were missing: this mapping was
+    // written against what the ENGINE needs, and the review screen needs more than that. Without
+    // them `profileGaps` never clears and no profile can be approved, however complete it is.
+    const s = toEngineStudent({
+      ...row, age: 12,
+      phone: "555-0101", email: "a@example.com",
+      emergencyContactName: "Jo Kin", emergencyContactPhone: "555-0199",
+      guardianName: "Sam Kin", guardianPhone: "555-0102", guardianRelationship: "Parent",
+      recurringPotentialUnlocked: true,
+    });
+    assert.equal(s.emergencyContactName, "Jo Kin");
+    assert.equal(s.emergencyContactPhone, "555-0199");
+    assert.equal(s.guardianName, "Sam Kin", "a minor's guardian is required before approval");
+    assert.equal(s.guardianPhone, "555-0102");
+    assert.equal(s.guardianRelationship, "Parent");
+    assert.equal(s.phone, "555-0101");
+    assert.equal(
+      s.recurringUnlocked, true,
+      "the screens' name for recurring_potential_unlocked — the one rename this mapping owns",
+    );
+  });
+
   test("the no-ride list arrives as an array the engine can call .includes on", () => {
     const s = toEngineStudent(row, { noRideHorseIds: ["h9"] });
     assert.deepEqual(s.noRideHorses, ["h9"]);
@@ -213,5 +236,32 @@ describe("bookings", () => {
     // And the other direction, which is what made the bug invisible: a one-off really does
     // have no series, so `null` here has to mean "booked on its own" rather than "not mapped".
     assert.equal(toEngineBooking({ ...row, recurringId: null }).recurringId, null);
+  });
+
+  test("the stored receipt arrives whole, not just the total", () => {
+    // A price is stamped at creation and never recomputed, so the components ARE the
+    // explanation — and every screen showing a price has to be able to show that explanation.
+    // Sending the total alone leaves the receipt blank; sending none of it, which is what this
+    // did, rendered a bare "$".
+    const b = toEngineBooking({
+      id: "b1", studentId: "s1", horseId: "h1", lessonTypeId: "lt1",
+      date: "2026-09-15", startTime: "09:00:00", endTime: "10:00:00", status: "completed",
+      isBillable: true,
+      basePrice: 65, bandAdjustment: 10, frequencyDiscount: 5, offerDiscount: 0,
+      manualAdjustment: 0, price: 70,
+    });
+    assert.deepEqual(
+      {
+        basePrice: b.basePrice, bandAdjustment: b.bandAdjustment,
+        frequencyDiscount: b.frequencyDiscount, offerDiscount: b.offerDiscount,
+        manualAdjustment: b.manualAdjustment, price: b.price,
+      },
+      { basePrice: 65, bandAdjustment: 10, frequencyDiscount: 5, offerDiscount: 0, manualAdjustment: 0, price: 70 },
+    );
+    assert.equal(
+      b.basePrice + b.bandAdjustment - b.frequencyDiscount - b.offerDiscount + b.manualAdjustment,
+      b.price,
+      "the components must still add up to the total they were stamped alongside",
+    );
   });
 });
