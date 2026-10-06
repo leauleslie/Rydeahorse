@@ -315,7 +315,7 @@ export function toEngineTrainerConfig(row) {
 // outer of the two fences.
 
 // Date#getDay() index -> the day_of_week enum. The inverse of DOW_INDEX.
-const DOW_NAME = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+export const DOW_NAME = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 /** Engine field name -> column name, for the fields a screen is allowed to change. */
 const STUDENT_PATCH_FIELDS = {

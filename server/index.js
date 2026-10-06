@@ -202,6 +202,17 @@ app.patch("/api/students/:id", handler(({ repo, req }) =>
 app.put("/api/availability", handler(({ repo, req }) =>
   repo.write.availability.replace(fromEngineAvailability(req.body.windows))));
 
+// A standing weekly slot and the occurrences it generates, created or ended as one unit. The
+// screens send `day` as a Date#getDay() index, which is what they hold; the repository maps it.
+app.post("/api/recurring", handler(({ repo, req }) =>
+  repo.write.recurring.create(req.body)));
+
+app.post("/api/recurring/:id/end", handler(({ repo, req }) =>
+  repo.write.recurring.end({
+    recurringId: req.params.id,
+    now: req.body?.now ? new Date(req.body.now) : new Date(),
+  })));
+
 const port = Number(process.env.PORT ?? 3001);
 const server = app.listen(port, () => {
   console.log(`API on http://localhost:${port}`);

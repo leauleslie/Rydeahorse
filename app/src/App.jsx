@@ -2130,7 +2130,13 @@ function SheetRouter(props) {
     return (
       <Sheet title="End this recurring series?" subtitle={`${st.name} · ${DAY_NAMES[rec.day]}s, ${timeStr(parseTime(rec.start))}`} onClose={close} closeLabel="Keep the series">
         <p className="text-xs text-gray-500 mb-3">This removes {futureCount} upcoming occurrence{futureCount === 1 ? "" : "s"} and stops new ones being generated. Past lessons stay on the record.</p>
-        <Btn variant="danger" className="w-full" onClick={() => { endRecurringSeries(rec.id); if (role === "coach") notifyStudent(rec.studentId, "recurring_ended", `${DAY_NAMES[rec.day]}s ${timeStr(parseTime(rec.start))} · ${futureCount} upcoming lesson${futureCount === 1 ? "" : "s"} removed`); close(); if (props.setCoachScreen) props.setCoachScreen("day"); }}>End series</Btn>
+        <Btn variant="danger" className="w-full" disabled={props.busy} onClick={async () => {
+          // The server removes the upcoming occurrences and writes the rider's alert itself —
+          // doing it here too would append a second alert that the refetch then discards.
+          if (!await props.persist(() => api.endRecurring(rec.id, NOW))) return;
+          close();
+          if (props.setCoachScreen) props.setCoachScreen("day");
+        }}>{props.busy ? "Ending…" : "End series"}</Btn>
       </Sheet>
     );
   }
@@ -3882,27 +3888,31 @@ function NewBooking(props) {
           props.setCoachDate(firstDate);
           setCoachScreen("day");
         } else {
-          const rec = { id: uid("rec"), studentId, horseId: chosenHorse.id, lessonTypeId, day, start: time, status: "active", justCreated: false };
-          setRecurringBookings((prev) => [...prev, rec]);
-          setBookings((prev) => [...prev, ...generateOccurrences(rec, 4).map((date) => {
-            const b = bookingFromRecurring(rec, date, lessonTypes, null, { students, priceBands, trainerConfig });
-            // A manual override on setup applies to every occurrence generated now, and is
-            // carried as manualAdjustment so each row's receipt still adds up.
-            return manualAdj ? { ...b, manualAdjustment: manualAdj, price: Math.min(Math.max(b.price + manualAdj, lt.minPrice), lt.maxPrice), notes: overrideNote } : b;
-          })]);
-          props.notifyStudent(studentId, "recurring_created", `${DAY_NAMES[day]}s ${timeStr(parseTime(time))} with ${chosenHorse.name} · $${priceFields.price} a lesson`);
+          // The whole series, or none of it. The server validates all four occurrences before
+          // writing any — a pattern that works this week and not in three is not a pattern, and
+          // the rider would find out in three weeks. A manual override applies to every
+          // occurrence and travels as manualAdjustment, so each week's receipt still adds up.
+          const ok = await persist(() => api.createRecurring({
+            studentId,
+            horseId: chosenHorse.id,
+            lessonTypeId,
+            day,
+            start: time,
+            startDate: isoDateOf(TODAY),
+            occurrences: 4,
+            manualAdjustment: manualAdj || 0,
+            notes: overrideNote,
+            status: "confirmed",
+          }));
+          if (!ok) return;
           props.setSelectedStudentId(studentId);
           setCoachScreen("student-profile");
         }
       }}>{busy ? "Saving…" : mode === "one_time" ? "Create booking" : "Create recurring lesson"}</Btn>
       {mode !== "one_time" && (
-        // Said out loud rather than discovered by refreshing. `repo.write` has no recurring
-        // patterns yet (CLAUDE.md, "The write surface is partial"), so this button still only
-        // moves React state — and a standing weekly slot that silently evaporates is a worse
-        // thing to find out by accident than almost anything else on these screens.
-        <p className="text-xs text-amber-700 mt-2">
-          Recurring lessons aren't saved to the database yet — this one will disappear when you
-          reload. One-off bookings do save.
+        <p className="text-xs text-gray-400 mt-2">
+          Creates the next 4 weeks. All four are checked before any is booked — if one week
+          doesn't work, none of them is written and you'll be told which.
         </p>
       )}
     </div>
@@ -4901,7 +4911,9 @@ function ManageRecurring(props) {
       <div className="space-y-2">
         <Btn className="w-full" onClick={() => setSheet({ type: "recurring-slot", ctx: { recurringId: r.id, mode: "horse" } })}>Change horse</Btn>
         <Btn className="w-full" onClick={() => setSheet({ type: "recurring-slot", ctx: { recurringId: r.id, mode: "slot" } })}>Change day / time</Btn>
-        <Btn variant="danger" className="w-full" onClick={() => { endRecurringSeries(r.id); setStudentScreen("future"); }}>End this recurring lesson</Btn>
+        <Btn variant="danger" className="w-full" disabled={props.busy} onClick={async () => {
+          if (await props.persist(() => api.endRecurring(r.id, NOW))) setStudentScreen("future");
+        }}>{props.busy ? "Ending…" : "End this recurring lesson"}</Btn>
       </div>
     </div>
   );
@@ -5050,6 +5062,8 @@ const api = {
   createStudent: (s) => api.send("POST", "/api/students", s),
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
+  createRecurring: (r) => api.send("POST", "/api/recurring", r),
+  endRecurring: (id, now) => api.send("POST", `/api/recurring/${id}/end`, { now: now.toISOString() }),
 };
 
 export default function App() {

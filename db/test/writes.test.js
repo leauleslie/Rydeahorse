@@ -399,3 +399,100 @@ describe("concurrency", () => {
     }
   });
 });
+
+describe("standing weekly slots", () => {
+  // The fixture's trainer A1 teaches Tuesdays 09:00–17:00, and 11:00 is free for both the horse
+  // and the coach — so a Tuesday pattern at 11:00 is the one that should succeed, and anything
+  // that fails around it is failing for a stated reason rather than for want of a free slot.
+  const TUESDAY = DATE.getDay();
+
+  const create = (over = {}) =>
+    asA1(() => repo.write.recurring.create({
+      studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1].id,
+      day: TUESDAY, start: FREE, startDate: SHARED_DATE, occurrences: 4, ...over,
+    }));
+
+  test("a pattern writes one row per week, each with its own stamped receipt", async () => {
+    const { recurring, bookings: rows } = await create();
+    assert.equal(recurring.status, "active");
+    assert.equal(rows.length, 4, "four weeks asked for, four weeks written");
+
+    const dates = rows.map((r) => r.date).sort();
+    assert.equal(new Set(dates).size, 4, "no two occurrences land on the same day");
+    for (let i = 1; i < dates.length; i++) {
+      const gap = (toDate(dates[i]) - toDate(dates[i - 1])) / 86400000;
+      assert.equal(gap, 7, "a weekly pattern is seven days apart, every time");
+    }
+    for (const r of rows) {
+      assert.equal(r.recurringId, recurring.id, "every occurrence points back at its pattern");
+      assert.ok(r.price > 0, "each week carries its own price rather than inheriting one");
+    }
+  });
+
+  test("one unbookable week refuses the whole series, and says which", async () => {
+    // Take the third occurrence's slot with the same horse first. Nothing is wrong with weeks
+    // one, two or four — which is the point: a pattern that works three times out of four is
+    // not a pattern, and finding out in three weeks is the failure this prevents.
+    const third = new Date(DATE);
+    third.setDate(third.getDate() + 14);
+    await asA1(() => repo.write.bookings.create({
+      studentId: a1.students[1], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1].id,
+      date: third, start: FREE,
+    }));
+
+    const before = await countBookings();
+    await assert.rejects(create(), (err) => {
+      assert.ok(err instanceof BookingRejected);
+      assert.ok(err.failed.includes("horse_free"), `expected horse_free, got ${err.failed}`);
+      assert.ok(err.context.date, "the refusal must name the week that broke");
+      return true;
+    });
+    assert.equal(await countBookings(), before, "a refused series writes NOTHING, not three weeks");
+  });
+
+  test("ending a series drops what is still to come and keeps what already happened", async () => {
+    const { recurring, bookings: rows } = await create();
+    const first = rows.map((r) => r.date).sort()[0];
+
+    // End it from a week after the first occurrence: that one is in the past now, the rest
+    // are not.
+    const now = toDate(first);
+    now.setDate(now.getDate() + 1);
+
+    const { recurring: ended, removed } = await asA1(() =>
+      repo.write.recurring.end({ recurringId: recurring.id, now }));
+
+    assert.equal(ended.status, "ended");
+    assert.equal(removed, 3, "the three weeks that had not happened yet are gone");
+
+    const { rows: left } = await client.query(
+      "select date from bookings where recurring_id = $1", [recurring.id]);
+    assert.equal(left.length, 1, "the lesson that already happened is untouched");
+    assert.equal(left[0].date, first);
+  });
+
+  test("a series ended before it begins closes on the day it would have started", async () => {
+    // `recurring_bookings_end_after_start` refuses a span that closes before it opens, and a
+    // pattern created for next week and cancelled today is exactly that. It ran for no lessons;
+    // it did not run for minus two days.
+    const { recurring } = await create({ startDate: SHARED_DATE });
+    const beforeStart = toDate(SHARED_DATE);
+    beforeStart.setDate(beforeStart.getDate() - 2);
+
+    const { recurring: ended } = await asA1(() =>
+      repo.write.recurring.end({ recurringId: recurring.id, now: beforeStart }));
+    assert.equal(ended.endDate, recurring.startDate);
+  });
+
+  test("another trainer's series cannot be ended", async () => {
+    const { recurring } = await create();
+    const tenantA2 = { accountId: alder.accountId, trainerId: a2.trainerId };
+    const repoA2 = forTenant(db, { ...tenantA2, client });
+    await assert.rejects(
+      withTenantTransaction(client, tenantA2, () =>
+        repoA2.write.recurring.end({ recurringId: recurring.id, now: DATE })),
+      /no recurring pattern .* visible to this trainer/,
+      "a pattern belongs to the coach who created it, even inside one account",
+    );
+  });
+});

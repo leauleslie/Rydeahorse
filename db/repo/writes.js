@@ -20,9 +20,17 @@
 //   Alerts are informational.      A cancellation appends an alert; it never waits on one. The
 //                                  coach owns the schedule.
 import { eq, and, inArray, sql } from "drizzle-orm";
-import { bookings, students, studentAlerts, trainerAvailability } from "../schema/index.js";
+import {
+  bookings, students, studentAlerts, trainerAvailability, recurringBookings,
+} from "../schema/index.js";
 import { validateBooking, priceFor, cancelDisposition, parseTime, minToStr } from "../../engine/index.js";
-import { toEngineBooking, toDate, toHHMM } from "./to-engine.js";
+import { toEngineBooking, toDate, toHHMM, DOW_NAME } from "./to-engine.js";
+
+// The day_of_week enum -> what a rider reads in an alert. The enum is storage, not prose.
+const DOW_LABEL = {
+  sun: "Sunday", mon: "Monday", tue: "Tuesday", wed: "Wednesday",
+  thu: "Thursday", fri: "Friday", sat: "Saturday",
+};
 
 /**
  * The driver-level error behind whatever drizzle threw.
@@ -38,14 +46,24 @@ export function pgErrorOf(err) {
   return null;
 }
 
-/** Raised when the engine refuses a booking. Carries the checks so a screen can show all eight. */
+/**
+ * Raised when the engine refuses a booking. Carries the checks so a screen can show all eight.
+ *
+ * `context.date` is set when the refusal came from one occurrence of a recurring pattern. A
+ * series is refused as a whole, so without it the coach is told the pattern failed and left to
+ * work out which of four weeks did it.
+ */
 export class BookingRejected extends Error {
-  constructor(checks) {
+  constructor(checks, context = {}) {
     const failed = checks.filter((c) => !c.pass).map((c) => c.code);
-    super(`booking rejected: ${failed.join(", ")}`);
+    super(
+      `booking rejected: ${failed.join(", ")}` +
+        (context.date ? ` (on ${context.date})` : ""),
+    );
     this.name = "BookingRejected";
     this.checks = checks;
     this.failed = failed;
+    this.context = context;
   }
 }
 
@@ -298,6 +316,175 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
           });
         }
         return updated;
+      },
+    },
+
+    recurring: {
+      /**
+       * Create a standing weekly slot, and the occurrences it generates.
+       *
+       * ALL OR NOTHING, and that is the whole design. A weekly pattern that works once is not a
+       * pattern — the rider finds out three weeks later — so every occurrence is validated
+       * before any of them is written, and one refusal refuses the series. `findRecurringOptions`
+       * only ever offers patterns whose first four occurrences all pass, and this is the write
+       * that has to still be true by the time the coach presses the button.
+       *
+       * Each occurrence is validated against a context that already contains the ones planned
+       * before it. Occurrences are seven days apart and the rest-day window is seven days wide,
+       * so consecutive weeks sit exactly on that boundary: validating each against a world where
+       * the others do not exist would let a pattern through that its own second week breaks.
+       *
+       * The price is stamped per occurrence rather than once on the pattern. The pattern
+       * deliberately carries no price — base and band are fixed by the slot, but the rider's
+       * frequency tier is a fact about the month a lesson happens in, and a tier that moves in
+       * October must not retroactively reprice September.
+       */
+      async create({
+        studentId, horseId, lessonTypeId, day, start, startDate,
+        occurrences = 4, manualAdjustment = 0, notes = null, status = "confirmed",
+      }) {
+        await assertInTenantTransaction(client, tenant);
+        if (!Number.isInteger(day) || day < 0 || day > 6) {
+          throw new Error(`recurring.create expects a weekday index 0-6, got ${day}`);
+        }
+        if (occurrences < 1) throw new Error("a recurring pattern needs at least one occurrence");
+
+        // The first date on or after startDate that falls on this weekday, then weekly.
+        const from = toDate(startDate);
+        let first = new Date(from);
+        while (first.getDay() !== day) first.setDate(first.getDate() + 1);
+        const dates = Array.from({ length: occurrences }, (_, i) => {
+          const d = new Date(first);
+          d.setDate(d.getDate() + i * 7);
+          return d;
+        });
+
+        // Locked in date order, every day up front. Two coaches creating overlapping patterns
+        // in different orders would otherwise be able to deadlock on each other's days.
+        for (const d of dates) await lockTrainerDay(client, trainerId, asDateString(d));
+
+        const planned = [];
+        for (const date of dates) {
+          const ctx = await engineInputsFor(date);
+          const student = ctx.students.find((s) => s.id === studentId);
+          const horse = ctx.horses.find((h) => h.id === horseId);
+          const lessonType = ctx.lessonTypes.find((l) => l.id === lessonTypeId);
+          if (!student) throw new Error(`no student ${studentId} visible to this trainer`);
+          if (!horse) throw new Error(`no horse ${horseId} visible to this account`);
+          if (!lessonType) throw new Error(`no lesson type ${lessonTypeId} visible to this trainer`);
+
+          const validation = validateBooking({
+            ...ctx,
+            // The occurrences decided on so far are part of the world the next one is judged
+            // against — they are not in the database yet, and the horse does not care.
+            bookings: [...ctx.bookings, ...planned.map((p) => p.engineShape)],
+            trainerBookings: [...ctx.trainerBookings, ...planned.map((p) => p.engineShape)],
+            student, horse, lessonType, date, start, manualAdjustment,
+          });
+          if (!validation.ok) {
+            // Which week broke travels with the refusal: "it fails on 6 October" is actionable,
+            // "the pattern was rejected" sends the coach checking all four by hand.
+            throw new BookingRejected(validation.checks, { date: asDateString(date) });
+          }
+
+          const q = validation.quote ?? priceFor({
+            student, lessonType, date, start, manualAdjustment,
+            priceBands: ctx.priceBands, trainerConfig: ctx.trainerConfig,
+          });
+          const endTime = minToStr(parseTime(start) + lessonType.durationMin);
+          planned.push({
+            date, endTime, quote: q,
+            engineShape: {
+              id: `planned-${asDateString(date)}`, studentId, horseId, lessonTypeId,
+              date, start, end: endTime, status, isBillable: false,
+            },
+          });
+        }
+
+        const [pattern] = await db.insert(recurringBookings).values({
+          trainerId, studentId, horseId, lessonTypeId,
+          dayOfWeek: DOW_NAME[day], startTime: start,
+          startDate: asDateString(dates[0]), status: "active", notes,
+        }).returning();
+
+        try {
+          const rows = await db.insert(bookings).values(planned.map((p) => ({
+            trainerId, recurringId: pattern.id, studentId, horseId, lessonTypeId,
+            date: asDateString(p.date), startTime: start, endTime: p.endTime, status,
+            basePrice: p.quote.basePrice,
+            bandAdjustment: p.quote.bandAdjustment,
+            frequencyDiscount: p.quote.frequencyDiscount,
+            offerDiscount: p.quote.offerDiscount,
+            manualAdjustment: p.quote.manualAdjustment,
+            price: p.quote.price,
+            isBillable: false,
+            isNewStudent: false,
+            notes,
+          }))).returning();
+          return { recurring: pattern, bookings: rows };
+        } catch (err) {
+          const pg = pgErrorOf(err);
+          if (pg?.code === "23P01") throw new SlotTaken(pg.constraint);
+          if (pg?.code === "55P03") throw new BookingBusy(LOCK_TIMEOUT_SECONDS);
+          throw err;
+        }
+      },
+
+      /**
+       * End a series, and drop the occurrences that have not happened yet.
+       *
+       * Deleted rather than cancelled, and the distinction matters on the coach's calendar: a
+       * cancelled lesson is an event that happened — someone called off a lesson that was
+       * going to run — and it stays visible and may still be billable. A week of a series that
+       * is simply no longer happening is not that, and rendering it as a cancellation would
+       * invent a story about every remaining week.
+       *
+       * Everything already in the past is untouched. Those lessons DID happen, and the ride
+       * tallies, the welfare forecasts and the rider's history all count them.
+       */
+      async end({ recurringId, now = new Date() }) {
+        await assertInTenantTransaction(client, tenant);
+        const [pattern] = await db.select().from(recurringBookings)
+          .where(and(
+            eq(recurringBookings.trainerId, trainerId),
+            eq(recurringBookings.id, recurringId),
+          ));
+        if (!pattern) throw new Error(`no recurring pattern ${recurringId} visible to this trainer`);
+
+        // Never before the day it began. A series created for next Thursday and ended this
+        // Tuesday would otherwise get an end date two days before its start, which
+        // `recurring_bookings_end_after_start` refuses — correctly, since a span that closes
+        // before it opens is not a span. A series ended before its first lesson ends on the day
+        // it would have started, having run for none.
+        const today = asDateString(now);
+        const endDate = today < pattern.startDate ? pattern.startDate : today;
+
+        const removed = await db.delete(bookings)
+          .where(and(
+            eq(bookings.trainerId, trainerId),
+            eq(bookings.recurringId, recurringId),
+            sql`${bookings.date} >= ${today}`,
+            inArray(bookings.status, ["pending", "confirmed"]),
+          ))
+          .returning();
+
+        const [updated] = await db.update(recurringBookings)
+          .set({ status: "ended", endDate, updatedAt: sql`now()` })
+          .where(and(
+            eq(recurringBookings.trainerId, trainerId),
+            eq(recurringBookings.id, recurringId),
+          ))
+          .returning();
+
+        await db.insert(studentAlerts).values({
+          studentId: pattern.studentId,
+          kind: "recurring_ended",
+          detail: `Your standing ${DOW_LABEL[pattern.dayOfWeek]} ${toHHMM(pattern.startTime)} ` +
+                  `lesson has ended. ${removed.length} upcoming lesson` +
+                  `${removed.length === 1 ? " was" : "s were"} removed.`,
+        });
+
+        return { recurring: updated, removed: removed.length };
       },
     },
 
