@@ -1458,7 +1458,7 @@ function TimeWindowEditor({ label, hint, windows, onChange }) {
 // The SEED_ constants are deliberately still here. They are the fixture the screens were
 // designed against, and they are what `App` falls back to when the API cannot be reached, so
 // the UI stays developable with the server down.
-function Screens({ initial }) {
+function Screens({ initial, onSignOut }) {
   const [horses, _setHorses] = useState(initial.horses);
   const [students, _setStudents] = useState(initial.students);
   const [lessonTypes, _setLessonTypes] = useState(initial.lessonTypes);
@@ -1975,9 +1975,14 @@ function Screens({ initial }) {
             <button onClick={() => setRole("student")} className={`text-xs px-3 py-1.5 rounded ${role === "student" ? "bg-gray-900 text-white" : "bg-gray-100"}`}>Student</button>
             <button onClick={handleUndo} disabled={!undoEntry} className={`text-xs px-3 py-1.5 rounded border ${undoEntry ? "border-gray-400 text-gray-700 hover:bg-gray-50" : "border-gray-200 text-gray-300 cursor-not-allowed"}`}>Undo</button>
           </div>
-          <span className="text-xs text-gray-400">
-            {busy ? "Saving…" : `Sim. now: ${DAY_NAMES[TODAY.getDay()]} ${fmtDate(TODAY)}, ${timeStr(NOW_MIN)}`}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">
+              {busy ? "Saving…" : `Sim. now: ${DAY_NAMES[TODAY.getDay()]} ${fmtDate(TODAY)}, ${timeStr(NOW_MIN)}`}
+            </span>
+            {onSignOut && (
+              <button onClick={onSignOut} className="text-xs text-gray-500 underline">Sign out</button>
+            )}
+          </div>
         </div>
 
         {saveError && (
@@ -5075,6 +5080,7 @@ const api = {
         checks: payload.checks, status: 422,
       });
     }
+    if (res.status === 401) throw new ApiError("your session has ended — sign in again", { status: 401 });
     if (res.status === 409) throw new ApiError("that slot was taken a moment ago", { status: 409 });
     if (res.status === 503) throw new ApiError("the barn is busy — try that again", { status: 503 });
     throw new ApiError(payload.message ?? `the server answered ${res.status}`, { status: res.status });
@@ -5092,6 +5098,9 @@ const api = {
   createStudent: (s) => api.send("POST", "/api/students", s),
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
+  me: () => api.send("GET", "/api/auth/me"),
+  requestLink: (email) => api.send("POST", "/api/auth/request-link", { email }),
+  signOut: () => api.send("POST", "/api/auth/sign-out"),
   createHorse: (h) => api.send("POST", "/api/horses", h),
   // "new" rather than a client-invented id: the row's id comes back from the database, and a
   // local one would name a record that never existed once the refetch replaced it.
@@ -5107,25 +5116,121 @@ const api = {
   endRecurring: (id, now) => api.send("POST", `/api/recurring/${id}/end`, { now: now.toISOString() }),
 };
 
-export default function App() {
-  const [state, setState] = React.useState({ status: "loading" });
+/**
+ * The sign-in screen.
+ *
+ * One field, because there is nothing else to ask for. No password means nothing to remember,
+ * nothing to reuse from another site, and nothing for a convincing-looking form to collect.
+ *
+ * The confirmation is deliberately the SAME whether or not that address belongs to a coach. The
+ * server will not tell the difference and neither will this: a form that says "no such coach"
+ * lets anyone enumerate the barns on the platform one address at a time.
+ */
+function SignIn({ reason }) {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await fetchBarn();
-        if (!cancelled) setState({ status: "ready", data });
-      } catch (err) {
-        if (!cancelled) setState({ status: "error", message: err.message });
-      }
-    })();
-    return () => { cancelled = true; };
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.requestLink(email);
+      setSent(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-start justify-center p-6">
+      <div className="w-full max-w-sm mt-16">
+        <h1 className="text-lg font-semibold mb-1">Rydeahorse</h1>
+        <p className="text-sm text-gray-500 mb-6">Sign in to your barn.</p>
+
+        {reason === "expired" && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-4">
+            That link had already been used, or was more than 15 minutes old. Links are good once.
+          </p>
+        )}
+        {reason === "error" && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 mb-4">
+            Something went wrong signing you in. Try requesting another link.
+          </p>
+        )}
+
+        {sent ? (
+          <div className="bg-white border border-gray-200 rounded p-4">
+            <p className="text-sm font-medium mb-1">Check your email</p>
+            <p className="text-xs text-gray-600">
+              If <span className="font-medium">{email}</span> belongs to a coach here, a sign-in
+              link is on its way. It works once, and expires in 15 minutes.
+            </p>
+            <p className="text-xs text-gray-400 mt-3">
+              No mail is actually being sent yet — the link is printed in the terminal window
+              running the app. Look for “SIGN-IN LINK”.
+            </p>
+            <button
+              onClick={() => { setSent(false); setEmail(""); }}
+              className="text-xs text-gray-600 underline mt-3"
+            >
+              Use a different address
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="bg-white border border-gray-200 rounded p-4">
+            <Field label="Email">
+              <input
+                type="email" required autoFocus value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@yourbarn.com" className="w-full"
+              />
+            </Field>
+            {error && <p className="text-xs text-red-700 mt-2">{error}</p>}
+            <Btn variant="primary" className="w-full mt-3" disabled={busy || !email}>
+              {busy ? "Sending…" : "Email me a sign-in link"}
+            </Btn>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [state, setState] = useState({ status: "loading" });
+
+  // `?signin=expired` is how the server sends a browser back from a dead link — it arrives by
+  // navigation, so there is no response body to read, only the URL.
+  const reason = new URLSearchParams(window.location.search).get("signin");
+
+  const load = React.useCallback(async () => {
+    try {
+      // Who am I, before anything else. A 401 here is the ordinary state of a browser that has
+      // not signed in yet, not an error — so it shows the form rather than a failure.
+      await api.me();
+    } catch (err) {
+      if (err.status === 401) return setState({ status: "signed-out" });
+      return setState({ status: "error", message: err.message });
+    }
+    try {
+      setState({ status: "ready", data: await fetchBarn() });
+    } catch (err) {
+      setState({ status: "error", message: err.message });
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   if (state.status === "loading") {
     return <div className="p-6 text-sm text-gray-500">Loading the barn…</div>;
   }
+
+  if (state.status === "signed-out") return <SignIn reason={reason} />;
 
   if (state.status === "error") {
     return (
@@ -5133,13 +5238,17 @@ export default function App() {
         <p className="text-sm font-medium text-red-700">Could not reach the API.</p>
         <p className="text-xs text-gray-600">{state.message}</p>
         <p className="text-xs text-gray-500">
-          The server needs <code>APP_DATABASE_URL</code> set. From <code>server/</code>:
-          <br />
-          <code>APP_DATABASE_URL="$TEST_DATABASE_URL" npm run dev</code>
+          The server needs <code>APP_DATABASE_URL</code> set. From the project folder, the
+          simplest way is to double-click <code>start.command</code>.
         </p>
       </div>
     );
   }
 
-  return <Screens initial={state.data} />;
+  return (
+    <Screens
+      initial={state.data}
+      onSignOut={async () => { await api.signOut().catch(() => {}); setState({ status: "signed-out" }); }}
+    />
+  );
 }

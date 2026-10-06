@@ -101,19 +101,65 @@ describe("the enforcement is real, not inert", () => {
     assert.equal(rows[0].rolsuper, false);
   });
 
+  // The exemptions are listed here rather than derived, so adding one is a deliberate edit to a
+  // test with a reason attached — not something a new migration can do by omission.
+  //
+  //   auth_identities / auth_codes      the RIDER side: a phone and a short code, keyed on the
+  //                                     phone itself, belonging to nobody until one is verified.
+  //   trainer_login_tokens / _sessions  the COACH side, and the interesting case: these are what
+  //                                     ESTABLISH `app.trainer_id`, so a policy reading it could
+  //                                     never be satisfied — the lookup runs before any tenant
+  //                                     exists and would match zero rows forever. Safe only
+  //                                     because of what they hold: a hash, an expiry and a
+  //                                     foreign key, and the hash cannot be replayed. Reading one
+  //                                     without permission tells you a session exists, not whose
+  //                                     it is or how to use it. See migrations 0004 and 0005 —
+  //                                     the narrow hole into `trainers` is a SECURITY DEFINER
+  //                                     function, not a loosened policy.
+  const NOT_TENANT_TABLES = [
+    "_rydeahorse_test_marker",
+    "auth_identities", "auth_codes",
+    "trainer_login_tokens", "trainer_sessions",
+  ];
+
   test("every tenant table has RLS enabled and a policy", async () => {
     const { rows } = await client.query(
       `select c.relname from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
        where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity
-         and c.relname not in ('_rydeahorse_test_marker', 'auth_identities', 'auth_codes')
+         and c.relname <> all($1)
        order by 1`,
+      [NOT_TENANT_TABLES],
     );
     assert.deepEqual(
       rows.map((r) => r.relname),
       [],
       "these tables hold tenant data but have no RLS enabled",
     );
+  });
+
+  test("the app role cannot read trainers without a tenant — only the login function can", async () => {
+    // The hole that signing in requires, measured. `rydeahorse_app` with no identity set must
+    // still see nothing in `trainers`; what it may do is CALL the definer function, which is the
+    // whole of the exemption and is four columns wide.
+    await client.query("begin");
+    try {
+      await client.query("set local role rydeahorse_app");
+      const direct = await client.query("select * from trainers");
+      assert.equal(direct.rows.length, 0, "no tenant, no rows — the policy still applies");
+
+      const viaFunction = await client.query(
+        "select * from auth_trainer_by_email($1)", ["coach+alder1@example.test"],
+      );
+      assert.equal(viaFunction.rows.length, 1, "and the login path still works");
+      assert.deepEqual(
+        Object.keys(viaFunction.rows[0]).sort(),
+        ["account_id", "email", "id", "name"],
+        "returning exactly what a session needs and nothing else",
+      );
+    } finally {
+      await client.query("commit");
+    }
   });
 
   // The caveat that makes every other test in this file conditional. Stated as an assertion so

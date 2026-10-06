@@ -15,6 +15,9 @@ import { createRuntime } from "../db/request.js";
 import { forTenant } from "../db/repo/index.js";
 import { BookingRejected, SlotTaken, BookingBusy } from "../db/repo/writes.js";
 import {
+  issueLoginToken, redeemLoginToken, sessionFor, revokeSession, LINK_TTL_MINUTES,
+} from "../db/auth.js";
+import {
   toDate, toEngineRecurring, fromEngineStudentPatch, fromEngineAvailability,
   fromEngineHorse, fromEngineOffer,
 } from "../db/repo/to-engine.js";
@@ -46,67 +49,62 @@ const runtime = createRuntime({ connectionString });
 const app = express();
 app.use(express.json());
 
-/**
- * Who is asking.
- *
- * Coach authentication has no mechanism yet (`db/SCHEMA-NOTES.md` §5 — a magic link is the
- * chosen direction, unbuilt), so this resolves the first trainer in the database and every
- * request is that coach. It is a STUB, and the one place in the server that will change when
- * auth lands: everything downstream already takes the tenant as an argument.
- */
-let cachedTenant = null;
-async function resolveTenant() {
-  if (cachedTenant) return cachedTenant;
-  const client = await runtime.pool.connect();
-  try {
-    const { rows } = await client.query(
-      "select id as trainer_id, account_id, name, email from trainers order by created_at limit 1",
-    );
-    if (!rows.length) {
-      throw new Error(
-        "no trainers in the database — this server has no one to be until a coach row exists",
-      );
-    }
-    cachedTenant = {
-      trainerId: rows[0].trainer_id,
-      accountId: rows[0].account_id,
-      name: rows[0].name,
-      email: rows[0].email,
-    };
-    return cachedTenant;
-  } finally {
-    client.release();
+// ---------------------------------------------------------------------------
+// Who is asking
+// ---------------------------------------------------------------------------
+//
+// Was a STUB that resolved the first trainer in the database and served every request as that
+// coach. It is now a session, and this is the only part of the server that changed: everything
+// downstream already took the tenant as an argument, which is what made the stub survivable in
+// the first place and what makes replacing it this small.
+
+const SESSION_COOKIE = "rydeahorse_session";
+
+// Set once the app is served over TLS. Marking a cookie Secure on plain http means the browser
+// simply never sends it back, so this follows deployment rather than leading it.
+const SECURE_COOKIES = process.env.NODE_ENV === "production";
+
+/** Read one cookie, without pulling in a parser for a header this simple. */
+function cookieFrom(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
   }
+  return null;
 }
 
-/**
- * Wrap a handler so it runs inside one tenant transaction and its failures become HTTP.
- *
- * The error translation is the interesting part. The engine's refusal is not a 500 — it is the
- * expected answer to "may I book this?", and the screen needs all eight checks to render its
- * checklist. Flattening that into a message would throw away the only thing the coach wants
- * to see.
- */
+function setSessionCookie(res, token, { days = 30 } = {}) {
+  res.append("Set-Cookie", [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "Path=/",
+    // httpOnly: script on the page cannot read it, so an XSS cannot walk away with the session.
+    "HttpOnly",
+    // Lax, not Strict: the coach arrives by clicking a link in her email, which is a
+    // cross-site navigation, and Strict would withhold the cookie on exactly that first request.
+    "SameSite=Lax",
+    `Max-Age=${days * 86400}`,
+    ...(SECURE_COOKIES ? ["Secure"] : []),
+  ].join("; "));
+}
+
+function clearSessionCookie(res) {
+  res.append("Set-Cookie",
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` +
+    (SECURE_COOKIES ? "; Secure" : ""));
+}
+
 const handler = (fn) => async (req, res) => {
   try {
-    let tenant = await resolveTenant();
-    let result;
-    try {
-      result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
-    } catch (err) {
-      // The cached tenant can outlive the row it names. Re-seeding the development database
-      // deletes every trainer and writes new ones, and the cache then points at an id that no
-      // longer resolves — so every request 500s until someone restarts a server that is not
-      // actually broken. Drop the cache and try once more; the second attempt resolves the
-      // coach who exists now.
-      //
-      // This is a property of the STUB above, not of the request layer: once a request carries
-      // its own authenticated identity there is nothing process-wide left to go stale.
-      if (!/no trainer row visible|no trainers in the database/.test(err.message ?? "")) throw err;
-      cachedTenant = null;
-      tenant = await resolveTenant();
-      result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
+    const tenant = await sessionFor(runtime.pool, { token: cookieFrom(req, SESSION_COOKIE) });
+    if (!tenant) {
+      // 401, not a redirect: every one of these is an API call made by a page that is already
+      // loaded, and the page is what decides to show the sign-in screen.
+      return res.status(401).json({ error: "not_signed_in" });
     }
+    const result = await runtime.run(tenant, (repo) => fn({ repo, req, tenant }));
     res.json(result ?? { ok: true });
   } catch (err) {
     if (err instanceof BookingRejected) {
@@ -124,6 +122,106 @@ const handler = (fn) => async (req, res) => {
     res.status(500).json({ error: "server_error", message: err.message });
   }
 };
+
+/**
+ * Is the server up and can it reach the database?
+ *
+ * Unauthenticated on purpose, and it exists because `start.command` needs an honest readiness
+ * check. It used to probe /api/bootstrap, which answered 200 while there was no sign-in — and
+ * the moment there was one it answered 401 and the launcher waited forever for a server that
+ * was already working. "Can I serve a request" and "are you allowed to see the barn" are two
+ * different questions and now have two different endpoints.
+ *
+ * It reports nothing about who is signed in, and nothing about the data.
+ */
+app.get("/api/health", async (_req, res) => {
+  try {
+    const client = await runtime.pool.connect();
+    try {
+      await client.query("select 1");
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Signing in
+// ---------------------------------------------------------------------------
+//
+// These four are the only routes that do NOT go through `handler`: they are what produces the
+// session `handler` requires, so wrapping them in it would be circular.
+
+/**
+ * Ask for a link.
+ *
+ * ALWAYS 202, whatever happened. Whether an address belongs to a coach is not something this
+ * endpoint will confirm — telling "no such coach" apart from "a link is on its way" lets anyone
+ * with the login form enumerate the barns on the platform. The rate limit hides behind the same
+ * answer, for the same reason.
+ */
+app.post("/api/auth/request-link", async (req, res) => {
+  try {
+    const issued = await issueLoginToken(runtime.pool, { email: req.body?.email });
+    if (issued) {
+      const link = `${appOrigin(req)}/api/auth/callback?token=${encodeURIComponent(issued.token)}`;
+      // No mail provider is configured yet, so the link goes to the server's own log and the
+      // coach is told to look there. That is a development stand-in and it is deliberately
+      // loud rather than silent — a login flow that appears to work while sending nothing is
+      // worse than one that admits what it is.
+      console.log(
+        `\n  SIGN-IN LINK for ${issued.trainer.email} (valid ${LINK_TTL_MINUTES} minutes):\n` +
+        `  ${link}\n`,
+      );
+    }
+    res.status(202).json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server_error", message: err.message });
+  }
+});
+
+/** Redeem a link. A browser arrives here by navigation, so this redirects rather than answering JSON. */
+app.get("/api/auth/callback", async (req, res) => {
+  try {
+    const opened = await redeemLoginToken(runtime.pool, { token: req.query.token });
+    if (!opened) return res.redirect("/?signin=expired");
+    setSessionCookie(res, opened.sessionToken);
+    res.redirect("/");
+  } catch (err) {
+    console.error(err);
+    res.redirect("/?signin=error");
+  }
+});
+
+/** Who am I — the one call the page makes before deciding whether to show the app. */
+app.get("/api/auth/me", async (req, res) => {
+  const tenant = await sessionFor(runtime.pool, { token: cookieFrom(req, SESSION_COOKIE) });
+  if (!tenant) return res.status(401).json({ error: "not_signed_in" });
+  res.json({ trainer: { id: tenant.trainerId, name: tenant.name, email: tenant.email } });
+});
+
+app.post("/api/auth/sign-out", async (req, res) => {
+  await revokeSession(runtime.pool, { token: cookieFrom(req, SESSION_COOKIE) });
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+/**
+ * Where the link should point.
+ *
+ * Behind a proxy the request's own host is the proxy's, so the forwarded headers win when they
+ * are present. APP_ORIGIN overrides both, which is what a deployment will set.
+ */
+function appOrigin(req) {
+  if (process.env.APP_ORIGIN) return process.env.APP_ORIGIN.replace(/\/$/, "");
+  const proto = req.headers["x-forwarded-proto"] ?? req.protocol ?? "http";
+  const host = req.headers["x-forwarded-host"] ?? req.headers.host;
+  return `${proto}://${host}`;
+}
 
 // ---------------------------------------------------------------------------
 // Reads

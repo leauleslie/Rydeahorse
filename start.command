@@ -90,7 +90,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-APP_DATABASE_URL="$DB_URL" PORT="$API_PORT" \
+# APP_ORIGIN is what the sign-in link points at, and it must be the WEB address rather than the
+# API's. The two are different ports in development, and the API only knows the host it was
+# called on — so without this the emailed link lands on :3001, which serves no page at all.
+APP_DATABASE_URL="$DB_URL" PORT="$API_PORT" APP_ORIGIN="$WEB_URL" \
   node "$ROOT/server/index.js" > "$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
 
@@ -121,7 +124,9 @@ $(tail -n 20 "$LOG_DIR/api.log")"
 
 $(tail -n 20 "$LOG_DIR/web.log")"
   fi
-  if curl -sf -o /dev/null -m 5 "http://localhost:${API_PORT}/api/bootstrap?date=2026-09-15" \
+  # /api/health, not /api/bootstrap: the barn needs a signed-in coach now, so bootstrap answers
+  # 401 to this check and would have it wait forever on a server that is already working.
+  if curl -sf -o /dev/null -m 5 "http://localhost:${API_PORT}/api/health" \
      && curl -sf -o /dev/null -m 5 "$WEB_URL"; then
     ready="yes"
     break

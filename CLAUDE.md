@@ -41,8 +41,9 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
   schema/                Tables as Drizzle declarations. No queries, no tenant ids — nothing
                          in here can leak, because nothing in here fetches.
   migrations/            0000 generated, 0001+ hand-written. drizzle-kit cannot express an
-                         EXCLUDE constraint, a range type, a role or a policy, so it will
-                         neither re-emit nor diff 0001-0003. Change one, write a new one.
+                         EXCLUDE constraint, a range type, a role, a policy or a SECURITY
+                         DEFINER function, so it will neither re-emit nor diff 0001-0005.
+                         Change one, write a new one.
   repo/index.js          forTenant(db, {accountId, trainerId}) — the one place a row can be
                          fetched for the wrong coach. Plus withTenantTransaction, the only
                          shape under which the RLS policies apply, and engineInputsFor(date).
@@ -51,6 +52,8 @@ db/                      Postgres schema, migrations, and the repository. Drizzl
                          withTenantTransaction before touching anything.
   request.js             The request boundary: one connection, one tenant, one transaction,
                          released whatever happens. Takes a provider, so the host is not fixed.
+  auth.js                Coach sign-in. The ONE place that runs outside withTenantTransaction,
+                         because resolving identity is what produces the tenant.
   test/                  node --test against a real Postgres branch. Reads, writes, isolation,
                          RLS and the engine mapping — see db/test/README.md.
 server/                  The HTTP layer, and the thinnest thing here. Resolves a tenant, calls
@@ -58,7 +61,7 @@ server/                  The HTTP layer, and the thinnest thing here. Resolves a
                          in it and no query is written in it.
   index.js               Express. Requires APP_DATABASE_URL explicitly — it will not fall back
                          to DATABASE_URL, so the app and the suites are never one variable
-                         apart. Tenant resolution is a STUB until coach auth exists.
+                         apart. Resolves the tenant from a SESSION cookie (db/auth.js).
 app/                     Phase 1a screens. Vite + React.
   src/App.jsx            The prototype, moved here and fed real rows. Still carries its own copy
                          of the rules — see "Two copies of the rules".
@@ -327,19 +330,35 @@ overturned it, rather than only in code.
   exception to derive-don't-store above. Two tests in `db/test/engine-inputs.test.js` assert the
   wrong numbers at their current values, so closing the gap fails them loudly. Bites for real on
   the first account with two trainers sharing a horse.
-- **The write surface is partial.** `repo.write` covers booking creation, cancellation,
-  settlement, students and availability. Still missing: horses, lesson types, price bands,
-  recurring patterns, offers and substitutions. Undo is unimplemented — writes return the rows
-  they wrote, which is what a one-step undo would need, but nothing stores them.
+- **The write surface, and the one piece still missing.** `repo.write` now covers bookings
+  (create, cancel, settle, re-horse one occurrence), recurring patterns (create, change, end),
+  students, availability, horses, lesson types, price bands and offers. What is NOT covered:
+  horse inactive periods and the substitution assignments built on them, so deactivating a horse
+  persists the flag but not the coverage plan around it. Undo is still unimplemented and is now
+  CLEARED after any write that reached the database — it only ever reversed React state, so
+  offering it after a save would revert the screen and leave the row.
 - **The runtime is a pool, and the choice of host is deliberately still open.** `db/request.js`
   takes a connection PROVIDER rather than assuming one, so a long-lived server (`poolProvider`)
   and a per-invocation connection (`clientProvider`) are the same code path. Measured against
   this project's own database: a warm query is ~33ms and opening a new connection is ~220ms
   even warm, which is why the default is a real pool. An idle pool does NOT keep a suspended
   Neon compute awake — that needs a keepalive or the always-on setting.
-- **Coach authentication has no mechanism.** `trainers.email` is the identifier it will key on
-  and nothing more (`db/SCHEMA-NOTES.md` §5). Screens need a stubbed trainer id until it exists,
-  and it is what decides the shape of the request layer.
+- ~~**Coach authentication has no mechanism.**~~ **Closed.** A magic link, keyed on
+  `trainers.email`: `db/auth.js` issues and redeems, `trainer_login_tokens` and
+  `trainer_sessions` store only hashes, and the server's `handler` resolves a session instead of
+  the stub that used to answer "the first trainer in the database". Links last 15 minutes, work
+  once, and are rate-limited per coach; the login form answers identically whether or not the
+  address belongs to anyone, so it cannot be used to enumerate barns.
+
+  The interesting part is the chicken-and-egg: resolving identity has to read `trainers`, and
+  `trainers` is RLS-scoped by the very value the read is trying to establish. The first attempt
+  simply returned zero rows and failed silently while the endpoint answered "check your email".
+  Migration 0005 cuts the hole as one SECURITY DEFINER function, four columns wide, with EXECUTE
+  granted to `rydeahorse_app` alone — not the owner credential, and not a loosened policy.
+  `rls.test.js` asserts the app role still sees nothing in `trainers` untenanted.
+
+  Still a stand-in: no mail provider, so the link is printed to the server log. Set `APP_ORIGIN`
+  in a deployment — it decides what the link points at, and defaults to the request's own host.
 - **Occurrence generation is still unextracted**, and belongs with the scheduled job that calls
   it rather than with the matching module.
 - ~~**The screens over-offer a shared horse.**~~ **Closed, and the whole matching layer with it.**
@@ -361,10 +380,11 @@ overturned it, rather than only in code.
   one-list behaviour fails them, so they are known to bite rather than merely to pass. Until
   they existed nothing in the suite told the two lists apart: every other test there lets
   `trainerBookings` default to `bookings`, which is exactly the case that cannot detect it.
-- **Writes from the screens are local only.** The app loads real rows and renders them, but its
-  handlers still mutate React state rather than calling the API. The endpoints exist and are
-  tested (`server/index.js`); nothing is wired to them yet, so a refresh discards changes.
-- Neither a horse nor a rider can be deleted today, only deactivated — which is what makes the
-  many `horses.find(...)` / `students.find(...)` lookups in the render path safe. **Adding a
-  deletion path requires migrating those lookups to null-safe helpers first**, not after; every
-  unguarded lookup becomes a white screen on the same day.
+- ~~**Writes from the screens are local only.**~~ **Closed.** Every screen the coach uses now
+  reaches the database, through `persist()` in `app/src/App.jsx`: it runs the write, re-reads the
+  barn rather than patching local state — the response is a database ROW, and turning rows into
+  the shapes the screens speak is `to-engine.js`'s job and nothing else's — and surfaces failures
+  in a banner rather than letting a write silently do nothing. The inverse mappings
+  (`fromEngineHorse`, `fromEngineStudentPatch`, `fromEngineAvailability`, `fromEngineOffer`) live
+  beside the forward ones and are WHITELISTS: forwarding whatever arrived would let a caller set
+  `trainer_id` and move a rider to another coach.
