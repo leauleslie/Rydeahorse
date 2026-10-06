@@ -2801,7 +2801,7 @@ function PricingExample({ form, priceBands, trainerConfig }) {
 }
 
 function LessonsScreen(props) {
-  const { lessonTypes, setLessonTypes, horses, trainerConfig, setTrainerConfig, bookings, recurringBookings, priceBands, setPriceBands, recomputeFrequencyTiers } = props;
+  const { lessonTypes, setLessonTypes, horses, trainerConfig, setTrainerConfig, bookings, recurringBookings, priceBands, setPriceBands, recomputeFrequencyTiers, busy } = props;
   // Changing a threshold changes who qualifies, so every student is re-tiered against the new
   // rule in the same action -- and anyone who moves is told. Leaving the old tiers standing
   // would mean the rule on screen and the rates being charged quietly disagreed.
@@ -2833,36 +2833,28 @@ function LessonsScreen(props) {
     return out;
   }
 
-  function saveBand() {
+  async function saveBand() {
     const clash = bandOverlap(bandForm, priceBands);
     if (clash || !bandForm.name || !bandForm.days.length) return;
-    // A new band has no id until it's saved, so the amounts draft is keyed by lesson type and
-    // the band id is stitched in here -- otherwise the amounts would have nowhere to land.
-    const bandId = bandForm.id || uid("band");
-    const { amounts, ...bandRow } = bandForm;
-    if (bandForm.id) setPriceBands((prev) => prev.map((b) => (b.id === bandId ? bandRow : b)));
-    else setPriceBands((prev) => [...prev, { ...bandRow, id: bandId }]);
-    setLessonTypes((prev) => prev.map((lt) => {
-      const v = Number((amounts || {})[lt.id] || 0);
-      const next = { ...(lt.bandAdjustments || {}) };
-      // A zero is stored as absent rather than as 0, so "not priced for this band" and "priced
-      // at nothing" stay the same state however the coach arrived at it.
-      if (v) next[bandId] = v; else delete next[bandId];
-      return { ...lt, bandAdjustments: next };
-    }));
-    setBandForm(null);
-  }
-  function save() {
-    // Uniqueness is enforced on save rather than blocked in the form: the coach's last choice is
-    // the one she meant, and refusing it would make her go and unset the other one first.
-    const clearOthers = (list, keepId) => (form.isIntro ? list.map((l) => (l.id === keepId ? l : { ...l, isIntro: false })) : list);
-    if (editingId === "new") {
-      const id = uid("lt");
-      setLessonTypes((prev) => clearOthers([...prev, { ...form, id }], id));
-    } else {
-      setLessonTypes((prev) => clearOthers(prev.map((l) => (l.id === editingId ? { ...form } : l)), editingId));
+    // The band, its windows and the premiums every lesson type charges for it go in one call:
+    // they are three tables and one thing, and a half-saved band prices some lessons and not
+    // others. The amounts draft is keyed by lesson type because a new band has no id until the
+    // database gives it one.
+    const { amounts, id, ...band } = bandForm;
+    if (await props.persist(() => api.savePriceBand(id ?? null, { ...band, amounts: amounts || {} }))) {
+      setBandForm(null);
     }
-    setEditingId(null); setForm(null);
+  }
+  async function save() {
+    // Intro uniqueness is enforced on save rather than blocked in the form: the coach's last
+    // choice is the one she meant, and refusing it would send her to unset the other one first.
+    // The server clears the previous intro type in the same transaction — the schema has a
+    // partial unique index, so doing it any later would be a constraint violation instead.
+    const { id, ...lt } = form;
+    if (await props.persist(() => api.saveLessonType(editingId === "new" ? null : editingId, lt))) {
+      setEditingId(null);
+      setForm(null);
+    }
   }
 
 
@@ -3002,7 +2994,7 @@ function LessonsScreen(props) {
           // wrapping them, which is a syntax error, not a style problem. prototype.jsx has
           // never parsed because of it.
           <>
-            <Btn variant="danger" className="w-full" disabled={inUse} title={inUse ? "Lessons still reference this type" : ""} onClick={() => { setLessonTypes((prev) => prev.filter((l) => l.id !== editingId)); setEditingId(null); setForm(null); }}>
+            <Btn variant="danger" className="w-full" disabled={inUse || busy} title={inUse ? "Lessons still reference this type" : ""} onClick={async () => { if (await props.persist(() => api.removeLessonType(editingId))) { setEditingId(null); setForm(null); } }}>
               {!inUse ? "Delete lesson type" : upcomingUse || patternUse ? "In use by upcoming lessons" : "Used by past lessons"}
             </Btn>
             {inUse && !upcomingUse && !patternUse && (
@@ -3070,7 +3062,7 @@ function LessonsScreen(props) {
                 </div>
                 <div className="flex flex-col gap-1">
                   <Btn onClick={() => setBandForm({ ...band, amounts: amountsFor(band.id) })}>Edit</Btn>
-                  <Btn variant="danger" disabled={used} title={used ? "Set its amounts to 0 in Edit first" : ""} onClick={() => setPriceBands((prev) => prev.filter((b) => b.id !== band.id))}>Remove</Btn>
+                  <Btn variant="danger" disabled={used || busy} title={used ? "Set its amounts to 0 in Edit first" : ""} onClick={() => props.persist(() => api.removePriceBand(band.id))}>Remove</Btn>
                 </div>
               </div>
             </Card>
@@ -5101,6 +5093,12 @@ const api = {
   updateStudent: (id, patch) => api.send("PATCH", `/api/students/${id}`, patch),
   replaceAvailability: (windows) => api.send("PUT", "/api/availability", { windows }),
   createHorse: (h) => api.send("POST", "/api/horses", h),
+  // "new" rather than a client-invented id: the row's id comes back from the database, and a
+  // local one would name a record that never existed once the refetch replaced it.
+  saveLessonType: (id, lt) => api.send("PUT", `/api/lesson-types/${id ?? "new"}`, lt),
+  removeLessonType: (id) => api.send("DELETE", `/api/lesson-types/${id}`),
+  savePriceBand: (id, band) => api.send("PUT", `/api/price-bands/${id ?? "new"}`, band),
+  removePriceBand: (id) => api.send("DELETE", `/api/price-bands/${id}`),
   updateHorse: (id, patch) => api.send("PATCH", `/api/horses/${id}`, patch),
   logOffer: (o) => api.send("POST", "/api/offers", o),
   createRecurring: (r) => api.send("POST", "/api/recurring", r),

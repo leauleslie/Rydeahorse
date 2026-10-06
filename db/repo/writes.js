@@ -22,6 +22,14 @@
 import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   bookings, students, studentAlerts, trainerAvailability, recurringBookings, horses, offers,
+  // Aliased: `lessonTypes` and `priceBands` are also the names the ENGINE's input bag uses, and
+  // a bare import would sit one typo away from writing to a table where a context field was
+  // meant. The suffix makes the two impossible to confuse at a glance.
+  lessonTypes as lessonTypesTable,
+  lessonTypeBandAdjustments as bandAdjustmentsTable,
+  lessonTypeRestrictedHorses as restrictedHorsesTable,
+  priceBands as priceBandsTable,
+  priceBandWindows as bandWindowsTable,
 } from "../schema/index.js";
 import { validateBooking, priceFor, cancelDisposition, parseTime, minToStr } from "../../engine/index.js";
 import { toEngineBooking, toDate, toHHMM, DOW_NAME } from "./to-engine.js";
@@ -760,6 +768,233 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
           .where(and(eq(horses.accountId, accountId), eq(horses.id, horseId)))
           .returning();
         if (!row) throw new Error(`no horse ${horseId} visible to this account`);
+        return row;
+      },
+    },
+
+    lessonTypes: {
+      /**
+       * Create or replace a lesson type, with its band premiums and its horse restrictions.
+       *
+       * Three tables, one call, because they are one thing to the coach. The adjustments and
+       * the restricted horses are junctions here and inline fields in the engine, so a partial
+       * save would leave a type priced for a band it no longer has, or restricted to a horse
+       * that is no longer on the list — states no screen can produce and every screen would
+       * then have to tolerate.
+       *
+       * Replaced wholesale rather than diffed, for the same reason availability is: the coach
+       * edits the whole form at once, and a diff would have to guess which existing row a
+       * changed one corresponds to. Both junctions are rewritten inside the caller's
+       * transaction, so nobody observes the empty middle.
+       */
+      async save({ lessonTypeId = null, bandAdjustments = {}, restrictedHorseIds = [], ...values }) {
+        await assertInTenantTransaction(client, tenant);
+
+        // A role is a flag, never an id — and exactly one type may carry the intro flag, which
+        // the schema enforces with a partial unique index. Clearing the others FIRST turns
+        // "the coach moved the intro flag" from a constraint violation into what she meant.
+        if (values.isIntro) {
+          await db.update(lessonTypesTable)
+            .set({ isIntro: false, updatedAt: sql`now()` })
+            .where(and(
+              eq(lessonTypesTable.trainerId, trainerId),
+              eq(lessonTypesTable.isIntro, true),
+              ...(lessonTypeId ? [sql`${lessonTypesTable.id} <> ${lessonTypeId}`] : []),
+            ));
+        }
+
+        let row;
+        if (lessonTypeId) {
+          [row] = await db.update(lessonTypesTable)
+            .set({ ...values, updatedAt: sql`now()` })
+            .where(and(
+              eq(lessonTypesTable.trainerId, trainerId),
+              eq(lessonTypesTable.id, lessonTypeId),
+            ))
+            .returning();
+          if (!row) throw new Error(`no lesson type ${lessonTypeId} visible to this trainer`);
+        } else {
+          [row] = await db.insert(lessonTypesTable)
+            .values({ ...values, trainerId })
+            .returning();
+        }
+
+        await db.delete(bandAdjustmentsTable)
+          .where(and(
+            eq(bandAdjustmentsTable.trainerId, trainerId),
+            eq(bandAdjustmentsTable.lessonTypeId, row.id),
+          ));
+        // A zero is stored as ABSENT rather than as 0, so "not priced for this band" and
+        // "priced at nothing" stay the same state however the coach arrived at it — which is
+        // what the band editor and the lesson type form both already do on screen.
+        const amounts = Object.entries(bandAdjustments)
+          .map(([bandId, amount]) => [bandId, Number(amount) || 0])
+          .filter(([, amount]) => amount !== 0);
+        if (amounts.length) {
+          await db.insert(bandAdjustmentsTable).values(
+            amounts.map(([bandId, amount]) => ({ lessonTypeId: row.id, bandId, trainerId, amount })),
+          );
+        }
+
+        await db.delete(restrictedHorsesTable)
+          .where(eq(restrictedHorsesTable.lessonTypeId, row.id));
+        if (restrictedHorseIds.length) {
+          await db.insert(restrictedHorsesTable).values(
+            restrictedHorseIds.map((horseId) => ({ lessonTypeId: row.id, horseId })),
+          );
+        }
+
+        return row;
+      },
+
+      /**
+       * Remove a lesson type no lesson refers to.
+       *
+       * The foreign key from `bookings` is ON DELETE RESTRICT, so a type any lesson used cannot
+       * go — which is right: the lesson would lose what it was. This catches the refusal and
+       * says so in those terms rather than surfacing a constraint name.
+       */
+      async remove({ lessonTypeId }) {
+        await assertInTenantTransaction(client, tenant);
+
+        // Asked before deleting, rather than catching the foreign key afterwards. The FK is
+        // RESTRICT and would stop it either way, but a 23503 arrives wrapped by drizzle and
+        // reads as a failed DELETE statement — and the coach needs to know a lesson still uses
+        // this, not that a query failed. Counting first also lets the message say how many.
+        const used = await db.select({ id: bookings.id }).from(bookings)
+          .where(and(eq(bookings.trainerId, trainerId), eq(bookings.lessonTypeId, lessonTypeId)));
+        const patterns = await db.select({ id: recurringBookings.id }).from(recurringBookings)
+          .where(and(
+            eq(recurringBookings.trainerId, trainerId),
+            eq(recurringBookings.lessonTypeId, lessonTypeId),
+          ));
+        if (used.length || patterns.length) {
+          // Any lesson, past or future. Checking only upcoming ones lets a coach clear next
+          // week, delete the type, and leave every past lesson pointing at a definition that no
+          // longer exists — the rider's history then cannot say what they rode or why it cost
+          // what it did. A type that has ever been used is part of the record.
+          throw new Error(
+            `lessons still refer to this type (${used.length} lesson` +
+              `${used.length === 1 ? "" : "s"}, ${patterns.length} standing slot` +
+              `${patterns.length === 1 ? "" : "s"}), so it cannot be removed. A lesson that lost ` +
+              `its type would lose what it was.`,
+          );
+        }
+
+        const [row] = await db.delete(lessonTypesTable)
+          .where(and(
+            eq(lessonTypesTable.trainerId, trainerId),
+            eq(lessonTypesTable.id, lessonTypeId),
+          ))
+          .returning();
+        if (!row) throw new Error(`no lesson type ${lessonTypeId} visible to this trainer`);
+        return row;
+      },
+    },
+
+    priceBands: {
+      /**
+       * Create or replace a band: its name, the days and hours it covers, and what each lesson
+       * type charges for it.
+       *
+       * The band editor is a second way into the same `band_adjustments` the lesson type form
+       * writes — not a copy of it. Both exist because the coach approaches the number from two
+       * directions: "what does this lesson cost?" when setting up a type, and "what is
+       * after-school worth?" when defining the band. So this writes the junction too, and a
+       * band saved here and a type saved there end up at the same row.
+       *
+       * One window per day, all sharing the band's start and end. That is the shape
+       * `toEnginePriceBands` collapses back into a single entry with several days, and keeping
+       * them as separate rows is what lets the exclusion constraint index `day_of_week` with
+       * `=` and catch two bands overlapping on a shared day.
+       */
+      async save({ bandId = null, name, days = [], start, end, amounts = {} }) {
+        await assertInTenantTransaction(client, tenant);
+        if (!name) throw new Error("a price band needs a name");
+        if (!days.length) throw new Error("a price band covers at least one day");
+
+        let band;
+        if (bandId) {
+          [band] = await db.update(priceBandsTable)
+            .set({ name })
+            .where(and(
+              eq(priceBandsTable.trainerId, trainerId),
+              eq(priceBandsTable.id, bandId),
+            ))
+            .returning();
+          if (!band) throw new Error(`no price band ${bandId} visible to this trainer`);
+          await db.delete(bandWindowsTable)
+            .where(and(
+              eq(bandWindowsTable.trainerId, trainerId),
+              eq(bandWindowsTable.bandId, bandId),
+            ));
+        } else {
+          [band] = await db.insert(priceBandsTable).values({ trainerId, name }).returning();
+        }
+
+        try {
+          await db.insert(bandWindowsTable).values(days.map((day) => ({
+            bandId: band.id, trainerId,
+            dayOfWeek: typeof day === "number" ? DOW_NAME[day] : day,
+            startTime: start, endTime: end,
+          })));
+        } catch (err) {
+          // 23P01 is the price_bands_no_overlap exclusion constraint. Two bands covering the
+          // same hour on the same day would make the premium on a slot ambiguous, which is the
+          // one thing a published band cannot be.
+          if (pgErrorOf(err)?.code === "23P01") {
+            throw new Error(
+              `those hours overlap another band on one of those days. A slot can only sit in ` +
+                `one band, or the premium on it has two answers.`,
+            );
+          }
+          throw err;
+        }
+
+        // The amounts arrive keyed by lesson type, because a new band has no id until this
+        // point and the draft had nowhere else to hang them.
+        for (const [lessonTypeId, raw] of Object.entries(amounts)) {
+          const amount = Number(raw) || 0;
+          await db.delete(bandAdjustmentsTable)
+            .where(and(
+              eq(bandAdjustmentsTable.trainerId, trainerId),
+              eq(bandAdjustmentsTable.bandId, band.id),
+              eq(bandAdjustmentsTable.lessonTypeId, lessonTypeId),
+            ));
+          if (amount !== 0) {
+            await db.insert(bandAdjustmentsTable)
+              .values({ lessonTypeId, bandId: band.id, trainerId, amount });
+          }
+        }
+
+        return band;
+      },
+
+      /**
+       * Remove a band that prices nothing.
+       *
+       * Refused while any lesson type carries an amount for it. The cascade would take those
+       * adjustments with it, and silently zeroing a premium across three lesson types is not
+       * something a coach should be able to do by tapping one X — the screen blocks it for the
+       * same reason, and this is the half of that rule the screen cannot enforce.
+       */
+      async remove({ bandId }) {
+        await assertInTenantTransaction(client, tenant);
+        const inUse = await db.select().from(bandAdjustmentsTable)
+          .where(and(
+            eq(bandAdjustmentsTable.trainerId, trainerId),
+            eq(bandAdjustmentsTable.bandId, bandId),
+          ));
+        if (inUse.length) {
+          throw new Error(
+            `${inUse.length} lesson type${inUse.length === 1 ? "" : "s"} still price this band. ` +
+              `Set their amounts to 0 first, so the change is one you can see.`,
+          );
+        }
+        const [row] = await db.delete(priceBandsTable)
+          .where(and(eq(priceBandsTable.trainerId, trainerId), eq(priceBandsTable.id, bandId)))
+          .returning();
+        if (!row) throw new Error(`no price band ${bandId} visible to this trainer`);
         return row;
       },
     },

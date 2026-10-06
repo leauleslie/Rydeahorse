@@ -222,6 +222,21 @@ app.post("/api/horses", handler(({ repo, req }) =>
 app.patch("/api/horses/:id", handler(({ repo, req }) =>
   repo.write.horses.update({ horseId: req.params.id, ...fromEngineHorse(req.body) })));
 
+// A lesson type and a price band each span several tables — the type carries its band premiums
+// and horse restrictions, the band carries its windows and the premiums other types charge for
+// it. One call each, so a half-saved pricing setup is not a state any screen has to tolerate.
+app.put("/api/lesson-types/:id", handler(({ repo, req }) =>
+  repo.write.lessonTypes.save({ lessonTypeId: req.params.id === "new" ? null : req.params.id, ...req.body })));
+
+app.delete("/api/lesson-types/:id", handler(({ repo, req }) =>
+  repo.write.lessonTypes.remove({ lessonTypeId: req.params.id })));
+
+app.put("/api/price-bands/:id", handler(({ repo, req }) =>
+  repo.write.priceBands.save({ bandId: req.params.id === "new" ? null : req.params.id, ...req.body })));
+
+app.delete("/api/price-bands/:id", handler(({ repo, req }) =>
+  repo.write.priceBands.remove({ bandId: req.params.id })));
+
 // Recording an offer, which is what later tells `offerStats` who tends to say yes.
 app.post("/api/offers", handler(({ repo, req }) =>
   repo.write.offers.create(fromEngineOffer(req.body))));

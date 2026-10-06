@@ -447,6 +447,117 @@ describe("the barn's horses", () => {
   });
 });
 
+describe("lesson types and price bands", () => {
+  const typeValues = {
+    name: "Evening Private", durationMin: 60, rideTimeMin: 45,
+    basePrice: 70, minPrice: 60, maxPrice: 95,
+  };
+
+  test("a type, its band premiums and its restricted horses save as one thing", async () => {
+    const band = await asA1(() => repo.write.priceBands.save({
+      name: "Early", days: [2], start: "06:00", end: "08:00",
+    }));
+    const lt = await asA1(() => repo.write.lessonTypes.save({
+      ...typeValues,
+      bandAdjustments: { [band.id]: 12 },
+      restrictedHorseIds: [alder.horses[0]],
+    }));
+
+    const adj = await client.query(
+      "select amount from lesson_type_band_adjustments where lesson_type_id = $1", [lt.id]);
+    assert.equal(adj.rows[0].amount, 12);
+    const res = await client.query(
+      "select horse_id from lesson_type_restricted_horses where lesson_type_id = $1", [lt.id]);
+    assert.equal(res.rows[0].horse_id, alder.horses[0]);
+  });
+
+  test("an amount of zero is stored as absent, not as a premium of nothing", async () => {
+    // "Not priced for this band" and "priced at nothing" have to stay the same state however
+    // the coach got there — she can reach this number from the band editor or the type form.
+    const band = await asA1(() => repo.write.priceBands.save({
+      name: "Early", days: [2], start: "06:00", end: "08:00",
+    }));
+    const lt = await asA1(() => repo.write.lessonTypes.save({
+      ...typeValues, bandAdjustments: { [band.id]: 0 },
+    }));
+    const { rows } = await client.query(
+      "select count(*)::int n from lesson_type_band_adjustments where lesson_type_id = $1", [lt.id]);
+    assert.equal(rows[0].n, 0);
+  });
+
+  test("moving the intro flag clears the type that had it", async () => {
+    // Exactly one intro type per coach, enforced by a partial unique index. Clearing the old one
+    // in the same transaction turns "the coach moved the flag" from a constraint violation into
+    // what she actually meant.
+    const first = await asA1(() => repo.write.lessonTypes.save({ ...typeValues, name: "Intro A", isIntro: true }));
+    const second = await asA1(() => repo.write.lessonTypes.save({ ...typeValues, name: "Intro B", isIntro: true }));
+
+    const { rows } = await client.query(
+      "select id, is_intro from lesson_types where trainer_id = $1 and is_intro", [a1.trainerId]);
+    assert.equal(rows.length, 1, "only ever one");
+    assert.equal(rows[0].id, second.id, "and it is the one just saved");
+    const old = await client.query("select is_intro from lesson_types where id = $1", [first.id]);
+    assert.equal(old.rows[0].is_intro, false);
+  });
+
+  test("a type any lesson has ever used cannot be removed", async () => {
+    // The foreign key is RESTRICT, and rightly: a lesson that lost its type would lose what it
+    // was, and the rider's history could not say what they rode or why it cost what it did.
+    await assert.rejects(
+      asA1(() => repo.write.lessonTypes.remove({ lessonTypeId: a1.lessonTypes[1] })),
+      /lessons still refer to this type/,
+    );
+  });
+
+  test("two bands cannot cover the same hour on the same day", async () => {
+    // A slot in two bands has two answers for its premium, which is the one thing a published
+    // band cannot have. The fixture already runs Peak on Tuesdays 16:00-19:00, so this collides
+    // with a band that is really there rather than with one the test had to invent.
+    await assert.rejects(
+      asA1(() => repo.write.priceBands.save({ name: "Twilight", days: [2], start: "18:00", end: "20:00" })),
+      /overlap another band/,
+    );
+  });
+
+  test("the same hours on a DIFFERENT day are fine", async () => {
+    await assert.doesNotReject(
+      asA1(() => repo.write.priceBands.save({ name: "Thursday peak", days: [4], start: "16:00", end: "19:00" })),
+    );
+  });
+
+  test("one band covering several days is several window rows", async () => {
+    // Which is what lets the exclusion constraint index day_of_week with `=`, and what
+    // toEnginePriceBands collapses back into one entry with several days.
+    const band = await asA1(() => repo.write.priceBands.save({
+      name: "Weekday early", days: [1, 2, 3], start: "06:00", end: "08:00",
+    }));
+    const { rows } = await client.query(
+      "select day_of_week from price_band_windows where band_id = $1 order by day_of_week", [band.id]);
+    assert.deepEqual(rows.map((r) => r.day_of_week).sort(), ["mon", "tue", "wed"]);
+  });
+
+  test("a band that prices something cannot be removed", async () => {
+    const band = await asA1(() => repo.write.priceBands.save({
+      name: "Early", days: [2], start: "06:00", end: "08:00",
+    }));
+    await asA1(() => repo.write.lessonTypes.save({ ...typeValues, bandAdjustments: { [band.id]: 10 } }));
+    await assert.rejects(
+      asA1(() => repo.write.priceBands.remove({ bandId: band.id })),
+      /still price this band/,
+      "silently zeroing a premium across several types is not a one-tap action",
+    );
+  });
+
+  test("another coach's lesson type is invisible to this one", async () => {
+    await assert.rejects(
+      asA1(() => repo.write.lessonTypes.save({
+        lessonTypeId: a2.lessonTypes[0], ...typeValues,
+      })),
+      /no lesson type .* visible to this trainer/,
+    );
+  });
+});
+
 describe("recording an offer", () => {
   const offer = (over = {}) => asA1(() => repo.write.offers.create({
     studentId: a1.students[0], horseId: alder.horses[0], lessonTypeId: a1.lessonTypes[1],
