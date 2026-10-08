@@ -401,18 +401,28 @@ right there.
 
 **The fix is not to widen the lesson-type or student scope.** That trades a welfare bug for a
 tenancy breach, and the isolation harness would rightly fail it. The fix is to stamp the facts
-onto the booking row at creation: `ride_time_min`, and whether the rider was an adult. That is
-the argument already accepted for the stored price receipt — a booking's saddle time is a
-historical fact about that lesson, and recomputing it from a table the reader may not be allowed
-to see is precisely what makes it wrong.
+onto the booking row at creation: `ride_time_min`, and whether the rider was an adult.
 
-That would be a **third exception to derive-don't-store**, which CLAUDE.md says needs the same
-standard of argument as the first two. It is not taken here; it needs recording in Section 9
-first. Until then the caps are permissive on shared horses, and two tests assert the wrong
-numbers at their current values so that closing the gap makes them fail loudly.
+**TAKEN, in migration 0006.** Recorded in Section 9 first, as the third exception to
+derive-don't-store required. The argument that carried it: what makes recomputation wrong here
+is not drift — which is what rules out stored counters generally — but **permission**. The
+reader is not allowed to see the table the answer lives in, and never will be. And unlike a
+counter these cannot go stale, because the lesson they describe is over.
 
-**What would reopen this:** the first account with two trainers sharing a horse — at which point
-the caps are wrong in production, not just in a fixture.
+Both columns are NOT NULL, with a CHECK that ride time is positive, because zero is precisely
+the value the bug produced. The backfill is worth a second look: it runs as the OWNER, which can
+see every lesson type and every student — the credential the application is forbidden. That the
+repair was trivial there and impossible in the app is the whole shape of the problem.
+
+`horseMinutesOnDate` prefers the stamped values and keeps the lookup as a fallback, so callers
+with no stamped rows — the browser prototype's own seed — behave exactly as before. The adult
+half uses `typeof === "boolean"` rather than `||`, because a stamped `false` has to beat the
+lookup rather than falling through to a roster the reader cannot see.
+
+The two tests that asserted the wrong numbers failed loudly when this landed, which is what they
+were for. They now assert 90, and a third asserts that the barn-mate's lesson type is **still**
+unreadable — the total is right *without* tenancy having been loosened, which is the only way
+this counts as fixed.
 
 ## 16. One booking list was doing two jobs, and two bugs were hiding each other
 

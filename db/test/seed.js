@@ -241,13 +241,17 @@ export async function seedAccounts(client) {
     ["id", "trainer_id", "start_date", "end_date", "reason"],
     trainers.map((t) => [t.timeOffId, t.trainerId, "2026-12-24", "2026-12-26", "Holiday"]));
 
+  // `ride_time_min` and `rider_was_adult` are stamped on the row, which is what lets welfare
+  // count a barn-mate's lesson at all — this fixture's whole point is that one trainer cannot
+  // read another's lesson types or students. 45 matches the lesson type used above.
   await bulk(client, "bookings",
     ["id", "trainer_id", "student_id", "horse_id", "lesson_type_id", "date", "start_time",
-     "end_time", "status", "base_price", "price"],
+     "end_time", "status", "base_price", "price", "ride_time_min", "rider_was_adult"],
     trainers.flatMap((t) =>
       t.bookings.map((b) => [
         b.id, t.trainerId, b.studentId, b.horseId, t.lessonTypes[1].id, SHARED_DATE,
         b.start, b.end, b.status, 60, 60,
+        45, (t.students.find((s) => s.id === b.studentId)?.age ?? 0) >= 18,
       ])));
 
   await bulk(client, "recurring_bookings",

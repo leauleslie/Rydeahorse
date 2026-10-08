@@ -176,6 +176,15 @@ export function toEngineBooking(row) {
     status: row.status,
     isBillable: row.isBillable,
 
+    // The welfare facts, stamped on the row rather than looked up.
+    //
+    // Carrying these is the entire point of storing them: welfare reads bookings account-wide,
+    // and the lesson types and students needed to resolve a barn-mate's lesson are trainer-
+    // scoped. Dropping them here would put the under-count straight back — the engine would
+    // fall through to the lookup and find nothing. See Section 9.
+    rideTimeMin: row.rideTimeMin,
+    riderWasAdult: row.riderWasAdult,
+
     // The stored receipt, carried whole.
     //
     // A price is the one thing in this schema that is deliberately NOT derived: a lesson priced

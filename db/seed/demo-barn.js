@@ -364,6 +364,9 @@ function build() {
     bookings.push({
       id: uuid(), studentId: student.id, horseId: horse.id, lessonTypeId: type.id,
       recurringId, date, start: toTime(startMin), end: toTime(endMin), status,
+      // Stamped, like the real write path does. Welfare reads bookings account-wide and cannot
+      // resolve another coach's lesson types or riders — see Section 9.
+      rideTimeMin: type.rideTimeMin, riderWasAdult: student.age >= 18,
       basePrice: type.basePrice, bandAdjustment,
       price: type.basePrice + bandAdjustment, billable,
       isNewStudent: type.isIntro,
@@ -754,10 +757,10 @@ async function main() {
   await bulk(client, "bookings",
     ["id", "trainer_id", "recurring_id", "student_id", "horse_id", "lesson_type_id", "date",
      "start_time", "end_time", "status", "base_price", "band_adjustment", "price",
-     "is_billable", "is_new_student"],
+     "is_billable", "is_new_student", "ride_time_min", "rider_was_adult"],
     barn.bookings.map((b) => [b.id, barn.trainerId, b.recurringId, b.studentId, b.horseId,
       b.lessonTypeId, b.date, b.start, b.end, b.status, b.basePrice, b.bandAdjustment, b.price,
-      b.billable, b.isNewStudent]));
+      b.billable, b.isNewStudent, b.rideTimeMin, b.riderWasAdult]));
 
   await bulk(client, "student_riding_windows",
     ["id", "student_id", "kind", "day_of_week", "start_time", "end_time"],

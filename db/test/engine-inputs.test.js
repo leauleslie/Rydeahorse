@@ -195,56 +195,70 @@ describe("welfare and the shared horse", () => {
   });
 
   // -------------------------------------------------------------------------
-  // A DEFECT this exercise surfaced. Asserted at its real value so it is recorded rather
-  // than remembered, and so closing it makes this test fail loudly.
+  // The defect those two tests recorded, now closed. They asserted 45 — the wrong number — so
+  // that closing the gap would fail them loudly. It did, and this is what replaced them.
   // -------------------------------------------------------------------------
-  test("DEFECT: a shared horse's saddle time under-counts the barn-mate's lessons entirely", () => {
+  test("a shared horse's saddle time counts BOTH coaches' lessons", () => {
     // Comet is ridden by both coaches on this date — 09:00 by a1 and 13:00 by a2, both
-    // slot-holding, both 45-minute lesson types. The honest total is 90.
+    // slot-holding, both 45-minute types. The honest total is 90, and it used to read 45.
     //
-    // It reads 45. horseMinutesOnDate resolves each booking's duration by looking its lesson
-    // type up in the `lessonTypes` array it was handed:
-    //
-    //     const lt = lessonTypes.find((l) => l.id === b.lessonTypeId);
-    //     return sum + (lt ? lt.rideTimeMin : 0);
-    //
-    // Bookings are account-wide, but lesson types are TRAINER-scoped — by design, and enforced
-    // by RLS, so a1 genuinely cannot read a2's. The barn-mate's lesson type is therefore not
-    // in the array, `lt` is undefined, and the lesson silently contributes ZERO rather than
-    // failing. The `? :` that makes it safe is exactly what makes it silent.
-    //
-    // This is not the mapping's doing — passing account-wide bookings is correct and required.
-    // It is a hole in the schema: the welfare rules promise to count every lesson the animal
-    // did, and the number they need to do that is not reachable from the data a single trainer
-    // is allowed to see.
-    //
-    // The fix is not to widen the lesson-type scope, which would break tenant isolation. It is
-    // to stamp `ride_time_min` onto the booking row at creation — the same argument that
-    // already justifies the stored price receipt: a booking's saddle time is a historical fact
-    // about that lesson, and recomputing it from a table the reader may not be allowed to see
-    // is what makes it wrong. That is a third exception to derive-don't-store and needs
-    // recording in Section 9 before it is taken.
+    // The barn-mate's lesson type is still unreadable to this coach, and always will be: that
+    // is tenancy working, not a gap. What changed is that the booking now carries its own
+    // `ride_time_min`, so the number no longer has to be looked up in a table the reader is
+    // not allowed to see. Section 9 — the third exception to derive-don't-store.
     const comet = horseNamed("Comet").id;
     const overall = horseMinutesOnDate(comet, DATE, ctx.bookings, ctx.lessonTypes, false, ctx.students);
-    const resolvable = ctx.bookings.filter(
-      (b) => b.horseId === comet && ctx.lessonTypes.some((l) => l.id === b.lessonTypeId));
+
     const unresolvable = ctx.bookings.filter(
       (b) => b.horseId === comet && !ctx.lessonTypes.some((l) => l.id === b.lessonTypeId));
-
-    assert.ok(unresolvable.length > 0, "the fixture must contain a barn-mate lesson to under-count");
-    assert.equal(overall, 45, "only this coach's slot-holding lesson is counted");
-    assert.notEqual(overall, 90, "90 is the honest total; if this ever passes, the defect is fixed");
-    assert.ok(resolvable.length < resolvable.length + unresolvable.length);
+    assert.ok(
+      unresolvable.length > 0,
+      "the fixture must still contain a lesson whose TYPE this coach cannot read, or this " +
+        "proves nothing — the point is that the total is right anyway",
+    );
+    assert.equal(overall, 90, "both coaches' lessons count toward the animal's day");
   });
 
-  test("the same hole makes the adult cap under-count too, for a second reason", () => {
-    // horseMinutesOnDate also resolves the rider via `students.find(...)` to test `age >= 18`,
-    // and students are trainer-scoped for the same reason lesson types are. So even once the
-    // duration is stamped on the booking, the adult cap still cannot tell whether a barn-mate's
-    // rider was an adult. Whatever carries ride time onto the booking has to carry that too.
+  test("the stamped ride time is what makes it count, not a widened scope", () => {
+    // The fix had to be the stamp and not "let this coach see the other's lesson types", which
+    // would trade a welfare bug for a tenancy breach. So: the lesson that used to vanish still
+    // has an unreadable type, and still contributes its minutes.
+    const comet = horseNamed("Comet").id;
+    const barnMate = ctx.bookings.find(
+      (b) => b.horseId === comet && !ctx.lessonTypes.some((l) => l.id === b.lessonTypeId));
+    assert.ok(barnMate, "a lesson of the barn-mate's, on the shared horse");
+    assert.equal(
+      ctx.lessonTypes.some((l) => l.id === barnMate.lessonTypeId), false,
+      "its type is STILL invisible to this coach — tenancy is intact",
+    );
+    assert.ok(barnMate.rideTimeMin > 0, "and the row carries its own saddle time regardless");
+  });
+
+  test("the adult cap counts the barn-mate's adult rider too", () => {
+    // The second half of the same hole: the cap also resolved the rider through `students` to
+    // test `age >= 18`, and students are trainer-scoped for the same reason lesson types are.
+    // `rider_was_adult` is stamped alongside the ride time, so both halves close together.
     const comet = horseNamed("Comet").id;
     const adult = horseMinutesOnDate(comet, DATE, ctx.bookings, ctx.lessonTypes, true, ctx.students);
-    assert.equal(adult, 45, "only this coach's adult rider is resolvable");
+
+    const barnMate = ctx.bookings.find(
+      (b) => b.horseId === comet && !ctx.students.some((s) => s.id === b.studentId));
+    assert.ok(barnMate, "a lesson whose RIDER this coach cannot read");
+    assert.equal(typeof barnMate.riderWasAdult, "boolean", "answered on the row, not looked up");
+    assert.equal(adult, 90, "both adult riders count toward the adult cap");
+  });
+
+  test("a minor's lesson stays out of the adult cap, and in the overall one", () => {
+    // The direction `||` would have got wrong: a stamped `false` has to beat the lookup rather
+    // than falling through to a roster this reader cannot see and coming back undefined.
+    const horse = horseNamed("Willow").id;
+    const minorLesson = { ...ctx.bookings[0], horseId: horse, riderWasAdult: false, rideTimeMin: 45 };
+    const withMinor = [...ctx.bookings.filter((b) => b.horseId !== horse), minorLesson];
+
+    const overall = horseMinutesOnDate(horse, DATE, withMinor, ctx.lessonTypes, false, ctx.students);
+    const adult = horseMinutesOnDate(horse, DATE, withMinor, ctx.lessonTypes, true, ctx.students);
+    assert.equal(overall, 45, "the animal still did the work");
+    assert.equal(adult, 0, "but it was not an adult doing it");
   });
 });
 

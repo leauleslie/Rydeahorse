@@ -243,9 +243,14 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
       const endTime = minToStr(parseTime(start) + lessonType.durationMin);
       planned.push({
         date, endTime, quote: q,
+        rideTimeMin: lessonType.rideTimeMin,
+        riderWasAdult: student.age >= 18,
         engineShape: {
           id: `planned-${asDateString(date)}`, studentId, horseId, lessonTypeId,
           date, start, end: endTime, status, isBillable: false,
+          // So week four is judged against a world where weeks one to three cost the horse
+          // their real saddle time, rather than zero.
+          rideTimeMin: lessonType.rideTimeMin, riderWasAdult: student.age >= 18,
         },
       });
     }
@@ -300,6 +305,11 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
           const [row] = await db.insert(bookings).values({
             trainerId, studentId, horseId, lessonTypeId,
             date: dayString, startTime: start, endTime, status,
+            // Stamped here, from the type and the rider this lesson actually has, because the
+            // coach who reads this row for welfare may not be the one who wrote it and cannot
+            // see either table. Section 9; the third exception to derive-don't-store.
+            rideTimeMin: lessonType.rideTimeMin,
+            riderWasAdult: student.age >= 18,
             basePrice: q.basePrice,
             bandAdjustment: q.bandAdjustment,
             frequencyDiscount: q.frequencyDiscount,
@@ -526,6 +536,7 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
           const rows = await db.insert(bookings).values(planned.map((p) => ({
             trainerId, recurringId: pattern.id, studentId, horseId, lessonTypeId,
             date: asDateString(p.date), startTime: start, endTime: p.endTime, status,
+            rideTimeMin: p.rideTimeMin, riderWasAdult: p.riderWasAdult,
             basePrice: p.quote.basePrice,
             bandAdjustment: p.quote.bandAdjustment,
             frequencyDiscount: p.quote.frequencyDiscount,
@@ -646,6 +657,7 @@ export function writesFor({ db, client, accountId, trainerId, engineInputsFor })
             horseId: next.horseId, lessonTypeId: next.lessonTypeId,
             date: asDateString(p.date), startTime: next.start, endTime: p.endTime,
             status: "confirmed",
+            rideTimeMin: p.rideTimeMin, riderWasAdult: p.riderWasAdult,
             basePrice: p.quote.basePrice,
             bandAdjustment: p.quote.bandAdjustment,
             frequencyDiscount: p.quote.frequencyDiscount,

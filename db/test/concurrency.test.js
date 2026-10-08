@@ -70,9 +70,12 @@ after(async () => {
 
 const insertBooking = (client, { trainerId, studentId, horseId, lessonTypeId }, start, end, status = "pending") =>
   client.query(
+    // ride_time_min and rider_was_adult are NOT NULL and stamped by the real write path; this
+    // suite inserts directly to race the CONSTRAINT rather than the repository, so it supplies
+    // them itself. The values are incidental here — what is on trial is the exclusion.
     `insert into bookings (trainer_id, student_id, horse_id, lesson_type_id, date, start_time,
-                           end_time, status, base_price, price)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, 60, 60) returning id`,
+                           end_time, status, base_price, price, ride_time_min, rider_was_adult)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, 60, 60, 45, true) returning id`,
     [trainerId, studentId, horseId, lessonTypeId, DATE, start, end, status],
   );
 

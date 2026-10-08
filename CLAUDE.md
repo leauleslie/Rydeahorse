@@ -202,11 +202,16 @@ reasoning rather than bending it:
   precisely what current state can't recover — a cancelled booking looks identical whichever
   side cancelled it.
 
-Adding a third exception needs the same standard of argument. **One is currently pending that
-argument** and is not taken: `bookings` would need `ride_time_min` and the rider's adult-ness
-stamped on it, because horse welfare counts every lesson the animal did while lesson types and
-students are trainer-scoped — so a barn-mate's lesson is unresolvable and silently contributes
-zero. See `db/SCHEMA-NOTES.md` §15 and the gap listed at the end of this file.
+- *A booking's saddle time and its rider's adult-ness are stamped.* The THIRD exception, taken
+  in migration 0006 after being argued in Section 9. Welfare counts every lesson the animal
+  did and so reads bookings account-wide, while lesson types and students are trainer-scoped —
+  so recomputing is wrong not because it DRIFTS but because the reader is not permitted to see
+  the table the answer lives in. A barn-mate's lesson used to contribute zero minutes. And
+  unlike a counter these cannot go stale, because the lesson they describe is over.
+
+A fourth exception needs the same standard of argument: a historical fact about the
+transaction that recomputation would actively get wrong, not a value it would merely be
+convenient to cache.
 
 **Pricing is three separate mechanisms, not one adjustable number.** A **band premium** attaches
 to the slot (uniform, published in advance), a **frequency discount** attaches to the student (a
@@ -319,17 +324,17 @@ overturned it, rather than only in code.
 - **Frequency tiers ship switched off** — the thresholds start blank, which renders the whole
   mechanism invisible. They're computed from completed calendar months, and on day one there
   aren't any. Reopens after the pilot's first full month.
-- **Horse welfare caps under-count on a horse shared between two trainers.**
-  `horseMinutesOnDate` resolves a booking's saddle time by looking its lesson type up in the
-  array it was handed. Bookings are loaded account-wide, as the welfare rules require; lesson
-  types are trainer-scoped, as tenancy requires. A barn-mate's lesson is therefore unresolvable
-  and contributes **zero** — a horse ridden 45 minutes by each of two coaches reports 45, not
-  90 — and the `? :` that keeps it from throwing is what makes it silent. The adult cap has the
-  same hole twice over, resolving riders through trainer-scoped `students`. The fix is not to
-  widen scope, which trades a welfare bug for a tenancy breach; it is the pending third
-  exception to derive-don't-store above. Two tests in `db/test/engine-inputs.test.js` assert the
-  wrong numbers at their current values, so closing the gap fails them loudly. Bites for real on
-  the first account with two trainers sharing a horse.
+- ~~**Horse welfare caps under-count on a horse shared between two trainers.**~~ **Closed** in
+  migration 0006. `bookings` now carries `ride_time_min` and `rider_was_adult`, stamped at
+  creation — the third and last exception to derive-don't-store, argued in Section 9 before it
+  was taken. What made recomputation wrong was not drift but PERMISSION: welfare reads bookings
+  account-wide, and lesson types and students are trainer-scoped, so a barn-mate's lesson
+  resolved to nothing and contributed zero minutes. A horse ridden 45 minutes by each of two
+  coaches reported 45; it reports 90.
+
+  Tenancy was NOT loosened to achieve it, and a test asserts that: the barn-mate's lesson type is
+  still unreadable to this coach, and the total is right anyway. `horseMinutesOnDate` prefers the
+  stamped values and keeps the lookup as a fallback for callers that have none.
 - **The write surface, and the one piece still missing.** `repo.write` now covers bookings
   (create, cancel, settle, re-horse one occurrence), recurring patterns (create, change, end),
   students, availability, horses, lesson types, price bands and offers. What is NOT covered:

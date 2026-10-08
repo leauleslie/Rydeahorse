@@ -61,17 +61,45 @@ export function getEligibleHorses(student, lessonType, horses) {
 }
 
 // ---- usage caps (check #4) ----
-// Computed on demand from bookings, never stored — a stored counter drifts, a computed value
-// can't. Saddle time (rideTimeMin), not calendar time.
+// Saddle time (rideTimeMin), not calendar time.
+//
+// Each booking carries its OWN ride time and its own rider's adult-ness, and those are preferred
+// over looking them up. That is not an optimisation. Welfare counts every lesson the animal did,
+// so this is handed bookings ACCOUNT-wide — while `lessonTypes` and `students` are trainer-scoped
+// and always will be. A barn-mate's lesson therefore had a type that was not in the array, `lt`
+// came back undefined, and the lesson contributed ZERO: a horse ridden 45 minutes by each of two
+// coaches reported 45. The `? :` that kept it from throwing is exactly what kept it quiet.
+//
+// The lookup remains as a fallback, for callers that have no stamped values — the browser
+// prototype's own seed among them. Where both are available they agree; where only the lookup is,
+// it is the same answer it always gave.
 export function horseMinutesOnDate(horseId, date, bookings, lessonTypes, adultOnly, students) {
   return bookings
     .filter((b) => b.horseId === horseId && sameDay(b.date, date) && holdsSlot(b))
     .reduce((sum, b) => {
-      const lt = lessonTypes.find((l) => l.id === b.lessonTypeId);
-      const st = students.find((s) => s.id === b.studentId);
-      if (adultOnly && !(st && st.age >= 18)) return sum;
-      return sum + (lt ? lt.rideTimeMin : 0);
+      if (adultOnly && !riderWasAdult(b, students)) return sum;
+      return sum + rideTimeOf(b, lessonTypes);
     }, 0);
+}
+
+/** A booking's saddle time: stamped if it has one, otherwise resolved from the type. */
+function rideTimeOf(booking, lessonTypes) {
+  if (Number.isFinite(booking.rideTimeMin)) return booking.rideTimeMin;
+  const lt = (lessonTypes || []).find((l) => l.id === booking.lessonTypeId);
+  return lt ? lt.rideTimeMin : 0;
+}
+
+/**
+ * Was this lesson's rider an adult?
+ *
+ * `?? ` rather than `||`, because `false` is a real answer here and the stamped value must win
+ * over the lookup even when it is false — a minor's lesson stamped `false` must not fall through
+ * to a roster this reader cannot see and come back undefined.
+ */
+function riderWasAdult(booking, students) {
+  if (typeof booking.riderWasAdult === "boolean") return booking.riderWasAdult;
+  const st = (students || []).find((s) => s.id === booking.studentId);
+  return !!(st && st.age >= 18);
 }
 
 // Which of the two daily caps is actually binding. A horse carrying mostly adult riders

@@ -113,6 +113,25 @@ export const bookings = pgTable(
 
     status: bookingStatus().notNull().default("pending"),
 
+    // ---- the welfare facts ----
+    // The THIRD exception to derive-don't-store, and the receipt below is the first.
+    //
+    // Welfare reads bookings ACCOUNT-wide — it counts every lesson the animal did, whoever
+    // booked it — while lesson types and students are TRAINER-scoped. So a barn-mate's lesson
+    // had a type this reader could not see, resolved to nothing, and contributed ZERO minutes:
+    // a horse ridden 45 minutes by each of two coaches reported 45.
+    //
+    // What makes recomputing these wrong is not drift, which is what rules out stored counters
+    // generally — it is PERMISSION. The reader is not allowed to see the table the answer lives
+    // in, and never will be. And unlike a counter they cannot go stale, because the lesson they
+    // describe is over. Stamped at creation, never recomputed. Section 9 has the full argument.
+    //
+    // Saddle time, never calendar time: scheduling reads `duration_min`, welfare reads this.
+    rideTimeMin: integer().notNull(),
+    // 18 — the same cutoff `adult_only` pairing and SMS routing use, so "adult" has one
+    // definition across the system rather than three that happen to agree.
+    riderWasAdult: boolean().notNull(),
+
     // ---- the stored receipt ----
     // The deliberate exception to derive-don't-store. A price is a historical fact about a
     // transaction, and *recomputing* is what makes it drift: a lesson priced in March against
@@ -173,6 +192,8 @@ export const bookings = pgTable(
       sql`${t.frequencyDiscount} >= 0 and ${t.offerDiscount} >= 0`,
     ),
     check("bookings_price_non_negative", sql`${t.price} >= 0`),
+    // Zero would silently reproduce the under-count this column exists to close.
+    check("bookings_ride_time_positive", sql`${t.rideTimeMin} > 0`),
     // The trainer half of check #6 stays in the engine (it relaxes for a below-capacity
     // group). The horse half never relaxes, and is constraint #1 — an EXCLUDE ... USING gist
     // in migrations/0001_constraints.sql, which drizzle-kit cannot express.
